@@ -21,6 +21,10 @@
 	],
 	"Plugins": [
 		{
+			"Name": "LyraUIFramework",
+			"Enabled": true
+		},
+		{
 			"Name": "ActorPalette",
 			"Enabled": true
 		},

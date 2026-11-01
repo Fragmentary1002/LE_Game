@@ -1,0 +1,38 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "Lyra UI Framework",
+    "Description": "A reusable data driven UI framework built on Lyra CommonGame, CommonUI and UIExtension.",
+    "Category": "UI",
+    "CreatedBy": "OpenAI",
+    "CanContainContent": false,
+    "IsBetaVersion": true,
+    "Installed": false,
+    "Modules": [
+        {
+            "Name": "LyraUIFramework",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        },
+        {
+            "Name": "LyraUIFrameworkEditor",
+            "Type": "Editor",
+            "LoadingPhase": "Default"
+        }
+    ],
+    "Plugins": [
+        {
+            "Name": "CommonUI",
+            "Enabled": true
+        },
+        {
+            "Name": "CommonGame",
+            "Enabled": true
+        },
+        {
+            "Name": "UIExtension",
+            "Enabled": true
+        }
+    ]
+}
