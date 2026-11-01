@@ -37,6 +37,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Lyra UI")
     void RequestClose();
 
+    /** 由内部 Layer 宿主在首次插入时触发打开生命周期。 */
+    void NotifyFrameworkOpened();
+
 public:
     /** 界面初始化时调用一次。 */
     UFUNCTION(BlueprintImplementableEvent, Category = "Lyra UI|Lifecycle")
@@ -90,6 +93,11 @@ private:
     /** 是否已经执行过 OnOpen。 */
     bool bOpened = false;
 
+    /** 是否至少经历过一次 CommonUI 激活。 */
+    bool bHasBeenActivated = false;
+
     /** 是否允许框架渲染。 */
     bool bFrameworkVisible = true;
+
+    friend class ULyraUIFrameworkLayerHost;
 };

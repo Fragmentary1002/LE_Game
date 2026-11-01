@@ -6,9 +6,9 @@
 
 class ULyraUIView;
 class ULyraUIViewHandle;
+class ULyraUIFrameworkLayerHost;
 struct FLyraUIConfigRow;
 struct FSubsystemCollectionBase;
-enum class EAsyncWidgetLayerState : uint8;
 
 /** 按本地玩家隔离管理 UI 配置、加载、实例和关闭流程。 */
 UCLASS()
@@ -40,13 +40,20 @@ public:
     virtual void Deinitialize() override;
 
 private:
-    /** 根据异步加载状态更新句柄与界面生命周期。 */
-    void HandleAsyncOpenState(TWeakObjectPtr<ULyraUIViewHandle> WeakHandle, EAsyncWidgetLayerState AsyncState, ULyraUIView* View);
-
     /** 将失败状态写入句柄并通知调用方。 */
     void FailOpen(ULyraUIViewHandle* Handle);
+
+    /** 恢复异步加载前挂起的玩家输入。 */
+    void ResumeInputForHandle(ULyraUIViewHandle* Handle);
+
+    /** 获取或在 Lyra RootLayout 中创建指定 Layer 的持久宿主。 */
+    ULyraUIFrameworkLayerHost* GetOrCreateLayerHost(FGameplayTag LayerTag);
 
     /** 正在加载或已打开的界面句柄。 */
     UPROPERTY(Transient)
     TArray<TObjectPtr<ULyraUIViewHandle>> ActiveHandles;
+
+    /** 每个 Lyra Layer 对应的内部 View 宿主。 */
+    UPROPERTY(Transient)
+    TMap<FGameplayTag, TObjectPtr<ULyraUIFrameworkLayerHost>> LayerHosts;
 };

@@ -85,5 +85,8 @@ private:
     /** 异步加载句柄。 */
     TSharedPtr<FStreamableHandle> StreamableHandle;
 
+    /** 异步加载期间挂起玩家输入时使用的 CommonUI token。 */
+    FName InputSuspendToken;
+
     friend class ULyraUIFrameworkManagerSubsystem;
 };

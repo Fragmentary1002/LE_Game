@@ -44,6 +44,16 @@ void ULyraUIView::RequestClose()
     }
 }
 
+/** 确保嵌入宿主的界面也执行一次首次打开生命周期。 */
+void ULyraUIView::NotifyFrameworkOpened()
+{
+    if (!bOpened)
+    {
+        bOpened = true;
+        OnOpen();
+    }
+}
+
 /** Widget 构造时只执行一次初始化事件。 */
 void ULyraUIView::NativeConstruct()
 {
@@ -70,13 +80,13 @@ void ULyraUIView::NativeOnActivated()
 
     if (!bOpened)
     {
-        bOpened = true;
-        OnOpen();
+        NotifyFrameworkOpened();
     }
-    else
+    else if (bHasBeenActivated)
     {
         OnResume();
     }
+    bHasBeenActivated = true;
 }
 
 /** 停用界面时通知业务暂停。 */

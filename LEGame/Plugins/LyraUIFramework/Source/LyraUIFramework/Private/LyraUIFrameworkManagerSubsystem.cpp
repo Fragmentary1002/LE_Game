@@ -1,19 +1,19 @@
 #include "LyraUIFrameworkManagerSubsystem.h"
 
 #include "CommonLocalPlayer.h"
+#include "CommonUIExtensions.h"
 #include "Engine/DataTable.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/StreamableManager.h"
 #include "Engine/World.h"
 #include "GameUIPolicy.h"
 #include "GameUIManagerSubsystem.h"
+#include "LyraUIFrameworkLayerHost.h"
 #include "LyraUIFrameworkSettings.h"
 #include "LyraUIFrameworkTypes.h"
 #include "LyraUIView.h"
 #include "LyraUIViewHandle.h"
 #include "PrimaryGameLayout.h"
-#include "Widgets/CommonActivatableWidget.h"
-#include "Widgets/CommonActivatableWidgetContainer.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LyraUIFrameworkManagerSubsystem)
 
@@ -48,13 +48,10 @@ ULyraUIViewHandle* ULyraUIFrameworkManagerSubsystem::OpenView(FName UIName, UObj
         ULyraUIViewHandle* ExistingHandle = ExistingHandles[0];
         if (ULyraUIView* ExistingView = ExistingHandle->GetView())
         {
-            if (UPrimaryGameLayout* ExistingRootLayout = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer()))
+            if (ULyraUIFrameworkLayerHost* LayerHost = LayerHosts.FindRef(ConfigRow->UILayer))
             {
-                if (UCommonActivatableWidgetContainerBase* LayerWidget = ExistingRootLayout->GetLayerWidget(ConfigRow->UILayer))
-                {
-                    LayerWidget->RemoveWidget(*ExistingView);
-                    LayerWidget->AddWidgetInstance(*ExistingView);
-                }
+                LayerHost->RemoveView(ExistingView);
+                LayerHost->AddView(ExistingView, ExistingHandle->Config.Presentation, ExistingHandle->Config.ZOrder);
             }
         }
         return ExistingHandle;
@@ -79,33 +76,48 @@ ULyraUIViewHandle* ULyraUIFrameworkManagerSubsystem::OpenView(FName UIName, UObj
     Handle->Initialize(this, UIName, *ConfigRow, OpenContext);
     Handle->SetState(ELyraUIFrameworkViewState::Loading);
     ActiveHandles.Add(Handle);
+    if (Handle->Config.bSuspendInputUntilLoaded)
+    {
+        Handle->InputSuspendToken = UCommonUIExtensions::SuspendInputForPlayer(GetLocalPlayer(), TEXT("LyraUIFrameworkLoading"));
+    }
 
     const TWeakObjectPtr<ULyraUIViewHandle> WeakHandle(Handle);
     const TWeakObjectPtr<ULyraUIFrameworkManagerSubsystem> WeakManager(this);
-    const FName UINameCopy = UIName;
-    const TWeakObjectPtr<UObject> WeakOpenContext(OpenContext);
-    TSharedPtr<FStreamableHandle> StreamableHandle = RootLayout->PushWidgetToLayerStackAsync<ULyraUIView>(
-        ConfigRow->UILayer,
-        ConfigRow->bSuspendInputUntilLoaded,
-        TSoftClassPtr<UCommonActivatableWidget>(ConfigRow->WBPPath.ToSoftObjectPath()),
-        [WeakManager, WeakHandle, UINameCopy, WeakOpenContext](EAsyncWidgetLayerState State, ULyraUIView* LoadedView)
+    TSharedPtr<FStreamableHandle> StreamableHandle = UAssetManager::Get().GetStreamableManager().RequestAsyncLoad(
+        ConfigRow->WBPPath.ToSoftObjectPath(),
+        FStreamableDelegate::CreateWeakLambda(this, [WeakManager, WeakHandle]()
         {
             if (ULyraUIFrameworkManagerSubsystem* Manager = WeakManager.Get())
             {
-                if (State == EAsyncWidgetLayerState::Initialize && LoadedView)
+                ULyraUIViewHandle* ActiveHandle = WeakHandle.Get();
+                if (!ActiveHandle || ActiveHandle->GetState() != ELyraUIFrameworkViewState::Loading)
                 {
-                    LoadedView->InitializeView(UINameCopy, WeakOpenContext.Get());
-                    if (ULyraUIViewHandle* ActiveHandle = WeakHandle.Get())
-                    {
-                        ActiveHandle->SetView(LoadedView);
-                    }
+                    return;
                 }
-                else
+                Manager->ResumeInputForHandle(ActiveHandle);
+
+                UClass* ViewClass = ActiveHandle->Config.WBPPath.Get();
+                ULyraUIFrameworkLayerHost* LayerHost = Manager->GetOrCreateLayerHost(ActiveHandle->Config.UILayer);
+                ULyraUIView* LoadedView = ViewClass && LayerHost
+                    ? CreateWidget<ULyraUIView>(Manager->GetLocalPlayer(), ViewClass)
+                    : nullptr;
+                if (!LoadedView)
                 {
-                    Manager->HandleAsyncOpenState(WeakHandle, State, LoadedView);
+                    Manager->FailOpen(ActiveHandle);
+                    return;
                 }
+
+                LoadedView->InitializeView(ActiveHandle->GetUIName(), ActiveHandle->OpenContext.Get());
+                ActiveHandle->SetView(LoadedView);
+                LayerHost->AddView(LoadedView, ActiveHandle->Config.Presentation, ActiveHandle->Config.ZOrder);
+                ActiveHandle->SetState(ELyraUIFrameworkViewState::Open);
+                if (ActiveHandle->Config.bRequestFocus)
+                {
+                    LoadedView->ActivateWidget();
+                }
+                ActiveHandle->OnOpened.Broadcast(LoadedView);
             }
-        });
+        }));
 
     Handle->SetStreamableHandle(MoveTemp(StreamableHandle));
     return Handle;
@@ -120,6 +132,7 @@ void ULyraUIFrameworkManagerSubsystem::CloseView(ULyraUIViewHandle* Handle)
     }
 
     Handle->SetState(ELyraUIFrameworkViewState::Closing);
+    ResumeInputForHandle(Handle);
     if (Handle->StreamableHandle.IsValid() && Handle->StreamableHandle->IsLoading())
     {
         Handle->StreamableHandle->CancelHandle();
@@ -128,9 +141,9 @@ void ULyraUIFrameworkManagerSubsystem::CloseView(ULyraUIViewHandle* Handle)
     if (ULyraUIView* View = Handle->GetView())
     {
         View->OnClose();
-        if (UPrimaryGameLayout* RootLayout = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer()))
+        if (ULyraUIFrameworkLayerHost* LayerHost = LayerHosts.FindRef(Handle->Config.UILayer))
         {
-            RootLayout->FindAndRemoveWidgetFromLayer(View);
+            LayerHost->RemoveView(View);
         }
     }
 
@@ -191,30 +204,6 @@ void ULyraUIFrameworkManagerSubsystem::Deinitialize()
     Super::Deinitialize();
 }
 
-/** 处理 CommonGame Layer 的异步推入结果。 */
-void ULyraUIFrameworkManagerSubsystem::HandleAsyncOpenState(TWeakObjectPtr<ULyraUIViewHandle> WeakHandle, EAsyncWidgetLayerState AsyncState, ULyraUIView* View)
-{
-    ULyraUIViewHandle* Handle = WeakHandle.Get();
-    if (!Handle || Handle->GetState() != ELyraUIFrameworkViewState::Loading)
-    {
-        return;
-    }
-
-    if (AsyncState == EAsyncWidgetLayerState::AfterPush && View)
-    {
-        Handle->SetView(View);
-        Handle->SetState(ELyraUIFrameworkViewState::Open);
-        if (Handle->Config.bRequestFocus)
-        {
-            View->ActivateWidget();
-        }
-        Handle->OnOpened.Broadcast(View);
-        return;
-    }
-
-    FailOpen(Handle);
-}
-
 /** 结束失败句柄并通知监听者。 */
 void ULyraUIFrameworkManagerSubsystem::FailOpen(ULyraUIViewHandle* Handle)
 {
@@ -223,7 +212,37 @@ void ULyraUIFrameworkManagerSubsystem::FailOpen(ULyraUIViewHandle* Handle)
         return;
     }
 
+    ResumeInputForHandle(Handle);
     Handle->SetState(ELyraUIFrameworkViewState::Failed);
     Handle->OnFailed.Broadcast(Handle->GetView());
     ActiveHandles.RemoveSingle(Handle);
+}
+
+/** 使用 CommonUI token 恢复指定句柄挂起的玩家输入。 */
+void ULyraUIFrameworkManagerSubsystem::ResumeInputForHandle(ULyraUIViewHandle* Handle)
+{
+    if (Handle && !Handle->InputSuspendToken.IsNone())
+    {
+        UCommonUIExtensions::ResumeInputForPlayer(GetLocalPlayer(), Handle->InputSuspendToken);
+        Handle->InputSuspendToken = NAME_None;
+    }
+}
+
+/** 获取已创建的宿主；缺少时将宿主压入指定 Lyra Layer。 */
+ULyraUIFrameworkLayerHost* ULyraUIFrameworkManagerSubsystem::GetOrCreateLayerHost(FGameplayTag LayerTag)
+{
+    if (ULyraUIFrameworkLayerHost* ExistingHost = LayerHosts.FindRef(LayerTag))
+    {
+        return ExistingHost;
+    }
+
+    UPrimaryGameLayout* RootLayout = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer());
+    ULyraUIFrameworkLayerHost* NewHost = RootLayout
+        ? RootLayout->PushWidgetToLayerStack<ULyraUIFrameworkLayerHost>(LayerTag, ULyraUIFrameworkLayerHost::StaticClass())
+        : nullptr;
+    if (NewHost)
+    {
+        LayerHosts.Add(LayerTag, NewHost);
+    }
+    return NewHost;
 }
