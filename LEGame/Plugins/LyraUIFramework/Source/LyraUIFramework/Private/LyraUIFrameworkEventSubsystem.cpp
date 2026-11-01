@@ -1,4 +1,5 @@
 #include "LyraUIFrameworkEventSubsystem.h"
+#include "UObject/UnrealType.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LyraUIFrameworkEventSubsystem)
 
@@ -9,6 +10,24 @@ bool ULyraUIFrameworkEventSubsystem::AddListener(FGameplayTag EventTag, UObject*
     {
         return false;
     }
+
+    UFunction* Function = Listener->FindFunction(FunctionName);
+    if (!Function || Function->NumParms != 1)
+    {
+        return false;
+    }
+    bool bMatchesPayload = false;
+    for (TFieldIterator<FProperty> It(Function); It; ++It)
+    {
+        if (It->HasAnyPropertyFlags(CPF_Parm))
+        {
+            const FStructProperty* Parameter = CastField<FStructProperty>(*It);
+            bMatchesPayload = Parameter && Parameter->Struct == FLyraUIFrameworkEventData::StaticStruct() &&
+                !It->HasAnyPropertyFlags(CPF_ReturnParm) &&
+                (!It->HasAnyPropertyFlags(CPF_OutParm) || It->HasAnyPropertyFlags(CPF_ConstParm));
+        }
+    }
+    if (!bMatchesPayload) { return false; }
 
     FLyraUIFrameworkEventDelegate Delegate;
     Delegate.BindUFunction(Listener, FunctionName);

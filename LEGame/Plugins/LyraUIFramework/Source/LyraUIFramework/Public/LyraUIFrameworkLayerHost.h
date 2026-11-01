@@ -8,64 +8,63 @@
 class UCanvasPanel;
 class UBorder;
 class ULyraUIView;
-class UCanvasPanelSlot;
 
-/** 在 Lyra 的单个 CommonUI Layer 内排序并管理多个框架界面。 */
+/** 一个同层界面及其布局配置，避免并行数组在回调重入时错位。 */
+USTRUCT()
+struct FLyraUIFrameworkLayerEntry
+{
+    GENERATED_BODY()
+
+    UPROPERTY(Transient)
+    TObjectPtr<ULyraUIView> View = nullptr;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UBorder> Background = nullptr;
+
+    UPROPERTY(Transient)
+    FLyraUIConfigRow Config;
+
+    int64 Order = 0;
+};
+
+/** 由 CommonUI 管理外层输入栈、由 Canvas 管理同层可见窗口。 */
 UCLASS()
 class LYRAUIFRAMEWORK_API ULyraUIFrameworkLayerHost : public UCommonActivatableWidget
 {
     GENERATED_BODY()
 
 public:
-    /** 将 View 放入 Canvas 并按配置重排同层界面。 */
-    void AddView(ULyraUIView* View, ELyraUIFrameworkViewPresentation Presentation, int32 ZOrder, ELyraUIFrameworkBlackType BlackType, FVector2D DesignResolution);
+    /** 插入同层界面并同步遮挡状态。 */
+    void AddView(ULyraUIView* View, const FLyraUIConfigRow& Config);
 
-    /** 从该 Layer 移除指定 View 并恢复剩余界面的可见状态。 */
+    /** 移除指定实例，刷新后恢复下层内容。 */
     void RemoveView(ULyraUIView* View);
 
+    /** 原地调整排序，不移除控件或触发释放。 */
+    void BringViewToFront(ULyraUIView* View);
+
+    /** 判断宿主是否仍被界面使用。 */
+    bool HasViews() const { return !Entries.IsEmpty(); }
+
 protected:
-    /** 创建承载 Layer View 的全屏 Canvas。 */
+    /** 创建原生宿主 Canvas。 */
     virtual void NativeOnInitialized() override;
 
-    /** 视口尺寸改变时重算黑边和内容区域。 */
+    /** 使用真实布局尺寸响应窗口大小和 DPI 变化。 */
     virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
-    /** 按 ZOrder 更新 Canvas 槽位并计算全屏遮挡关系。 */
+    /** 使用快照更新槽位和遮挡，允许业务回调增删界面。 */
     void RefreshViews();
 
-    /** 用于反射持有界面实例，避免被 GC 回收。 */
     UPROPERTY(Transient)
-    TArray<TObjectPtr<ULyraUIView>> Views;
+    TArray<FLyraUIFrameworkLayerEntry> Entries;
 
-    /** 全屏 View 会隐藏其下方的同层界面。 */
-    UPROPERTY(Transient)
-    TArray<ELyraUIFrameworkViewPresentation> Presentations;
-
-    /** 同层排序值，数值越大越靠上。 */
-    UPROPERTY(Transient)
-    TArray<int32> ZOrders;
-
-    /** 每个内容 View 对应的黑色背景控件。 */
-    UPROPERTY(Transient)
-    TArray<TObjectPtr<UBorder>> BlackBarBackgrounds;
-
-    /** 各 View 使用的黑边策略。 */
-    UPROPERTY(Transient)
-    TArray<ELyraUIFrameworkBlackType> BlackTypes;
-
-    /** 各 View 的设计分辨率。 */
-    UPROPERTY(Transient)
-    TArray<FVector2D> DesignResolutions;
-
-    /** 各 View 设计分辨率，用于计算保持比例后的留边。 */
-    UPROPERTY(Transient)
-    TArray<FVector2D> DesignResolutions;
-
-    /** 运行时创建的全屏 Canvas。 */
     UPROPERTY(Transient)
     TObjectPtr<UCanvasPanel> CanvasPanel;
 
-    /** 上次计算布局时的视口尺寸。 */
     FVector2D CachedViewportSize = FVector2D::ZeroVector;
+    int64 NextOrder = 0;
+    bool bRefreshing = false;
+    bool bRefreshRequested = false;
 };

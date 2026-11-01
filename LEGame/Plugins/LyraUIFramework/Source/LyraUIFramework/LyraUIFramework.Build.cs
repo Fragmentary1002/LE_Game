@@ -2,6 +2,7 @@ using UnrealBuildTool;
 
 public class LyraUIFramework : ModuleRules
 {
+    // 配置运行时模块依赖，公开头文件所需的模块也必须公开传递。
     public LyraUIFramework(ReadOnlyTargetRules Target) : base(Target)
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
@@ -15,14 +16,14 @@ public class LyraUIFramework : ModuleRules
             "UMG",
             "CommonUI",
             "CommonGame",
-            "UIExtension"
+            "UIExtension",
+            "SlateCore",
+            "DeveloperSettings"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
         {
-            "Slate",
-            "SlateCore",
-            "DeveloperSettings"
+            "Slate"
         });
     }
 }

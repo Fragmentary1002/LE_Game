@@ -2,12 +2,10 @@
 
 #include "CommonLocalPlayer.h"
 #include "CommonUIExtensions.h"
+#include "Engine/AssetManager.h"
 #include "Engine/DataTable.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/StreamableManager.h"
-#include "Engine/World.h"
-#include "GameUIPolicy.h"
-#include "GameUIManagerSubsystem.h"
 #include "LyraUIFrameworkLayerHost.h"
 #include "LyraUIFrameworkSettings.h"
 #include "LyraUIFrameworkTypes.h"
@@ -17,155 +15,179 @@
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LyraUIFrameworkManagerSubsystem)
 
-/** 根据配置执行重复策略并异步将界面压入 Lyra Layer。 */
+/** 根据配置快照执行重复策略并开始异步加载。 */
 ULyraUIViewHandle* ULyraUIFrameworkManagerSubsystem::OpenView(FName UIName, UObject* OpenContext)
 {
-    const FLyraUIConfigRow* ConfigRow = FindConfig(UIName);
-    if (!ConfigRow || ConfigRow->WBPPath.IsNull() || !ConfigRow->UILayer.IsValid())
+    if (bShuttingDown || !Cast<UCommonLocalPlayer>(GetLocalPlayer()))
     {
-        UE_LOG(LogTemp, Error, TEXT("UI 配置无效，无法打开界面：%s"), *UIName.ToString());
         return nullptr;
     }
-
-    TArray<ULyraUIViewHandle*> ExistingHandles;
-    for (ULyraUIViewHandle* ExistingHandle : ActiveHandles)
+    const FLyraUIConfigRow* Row = FindConfig(UIName);
+    if (!Row || Row->WBPPath.IsNull() || !Row->UILayer.IsValid())
     {
-        if (ExistingHandle && ExistingHandle->GetUIName() == UIName &&
-            ExistingHandle->GetState() != ELyraUIFrameworkViewState::Closed &&
-            ExistingHandle->GetState() != ELyraUIFrameworkViewState::Failed)
+        UE_LOG(LogTemp, Error, TEXT("UI 配置无效：%s"), *UIName.ToString());
+        return nullptr;
+    }
+    const FLyraUIConfigRow Config = *Row;
+    const TArray<TObjectPtr<ULyraUIViewHandle>> Snapshot = ActiveHandles;
+    for (ULyraUIViewHandle* Existing : Snapshot)
+    {
+        if (!Existing || Existing->GetUIName() != UIName || Existing->GetState() == ELyraUIFrameworkViewState::Closing)
         {
-            ExistingHandles.Add(ExistingHandle);
+            continue;
+        }
+        if (Config.DuplicatePolicy == ELyraUIFrameworkDuplicatePolicy::Reuse ||
+            Config.DuplicatePolicy == ELyraUIFrameworkDuplicatePolicy::BringToFront)
+        {
+            if (Config.DuplicatePolicy == ELyraUIFrameworkDuplicatePolicy::BringToFront)
+            {
+                if (ULyraUIFrameworkLayerHost* Host = LayerHosts.FindRef(Existing->Config.UILayer))
+                {
+                    Host->BringViewToFront(Existing->GetView());
+                }
+            }
+            return Existing;
+        }
+        if (Config.DuplicatePolicy == ELyraUIFrameworkDuplicatePolicy::Restart)
+        {
+            CloseView(Existing, true);
         }
     }
-
-    if (ConfigRow->DuplicatePolicy == ELyraUIFrameworkDuplicatePolicy::Reuse && !ExistingHandles.IsEmpty())
+    if (Config.DuplicatePolicy == ELyraUIFrameworkDuplicatePolicy::Restart)
     {
-        return ExistingHandles[0];
-    }
-
-    if (ConfigRow->DuplicatePolicy == ELyraUIFrameworkDuplicatePolicy::BringToFront && !ExistingHandles.IsEmpty())
-    {
-        ULyraUIViewHandle* ExistingHandle = ExistingHandles[0];
-        if (ULyraUIView* ExistingView = ExistingHandle->GetView())
+        for (ULyraUIViewHandle* Existing : ActiveHandles)
         {
-            if (ULyraUIFrameworkLayerHost* LayerHost = LayerHosts.FindRef(ConfigRow->UILayer))
+            if (Existing && Existing->GetUIName() == UIName && Existing->GetState() != ELyraUIFrameworkViewState::Closing)
             {
-                LayerHost->RemoveView(ExistingView);
-                const ULyraUIFrameworkSettings* Settings = GetDefault<ULyraUIFrameworkSettings>();
-                const FVector2D DesignResolution = Settings ? Settings->DesignResolution : FVector2D(1920.0f, 1080.0f);
-                LayerHost->AddView(ExistingView, ExistingHandle->Config.Presentation, ExistingHandle->Config.ZOrder, ExistingView->GetBlackType(), DesignResolution);
+                return Existing;
             }
         }
-        return ExistingHandle;
     }
-
-    if (ConfigRow->DuplicatePolicy == ELyraUIFrameworkDuplicatePolicy::Restart)
+    UPrimaryGameLayout* Root = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer());
+    if (!Root || !Root->GetLayerWidget(Config.UILayer))
     {
-        for (ULyraUIViewHandle* ExistingHandle : ExistingHandles)
-        {
-            CloseView(ExistingHandle);
-        }
-    }
-
-    UPrimaryGameLayout* RootLayout = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer());
-    if (!RootLayout)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("RootLayout 尚未创建，无法打开界面：%s"), *UIName.ToString());
+        UE_LOG(LogTemp, Error, TEXT("RootLayout 未注册 UI Layer：%s"), *Config.UILayer.ToString());
         return nullptr;
     }
-
     ULyraUIViewHandle* Handle = NewObject<ULyraUIViewHandle>(this);
-    Handle->Initialize(this, UIName, *ConfigRow, OpenContext);
+    Handle->Initialize(this, UIName, Config, OpenContext);
     Handle->SetState(ELyraUIFrameworkViewState::Loading);
     ActiveHandles.Add(Handle);
-    if (Handle->Config.bSuspendInputUntilLoaded)
+    if (Config.bSuspendInputUntilLoaded)
     {
         Handle->InputSuspendToken = UCommonUIExtensions::SuspendInputForPlayer(GetLocalPlayer(), TEXT("LyraUIFrameworkLoading"));
     }
-
     const TWeakObjectPtr<ULyraUIViewHandle> WeakHandle(Handle);
-    const TWeakObjectPtr<ULyraUIFrameworkManagerSubsystem> WeakManager(this);
-    TSharedPtr<FStreamableHandle> StreamableHandle = UAssetManager::Get().GetStreamableManager().RequestAsyncLoad(
-        ConfigRow->WBPPath.ToSoftObjectPath(),
-        FStreamableDelegate::CreateWeakLambda(this, [WeakManager, WeakHandle]()
+    TSharedPtr<FStreamableHandle> Streaming = UAssetManager::Get().GetStreamableManager().RequestAsyncLoad(
+        Config.WBPPath.ToSoftObjectPath(),
+        FStreamableDelegate::CreateWeakLambda(this, [this, WeakHandle]()
         {
-            if (ULyraUIFrameworkManagerSubsystem* Manager = WeakManager.Get())
+            ULyraUIViewHandle* Active = WeakHandle.Get();
+            if (!Active || Active->GetState() != ELyraUIFrameworkViewState::Loading || !ActiveHandles.Contains(Active))
             {
-                ULyraUIViewHandle* ActiveHandle = WeakHandle.Get();
-                if (!ActiveHandle || ActiveHandle->GetState() != ELyraUIFrameworkViewState::Loading)
-                {
-                    return;
-                }
-                Manager->ResumeInputForHandle(ActiveHandle);
-
-                UClass* ViewClass = ActiveHandle->Config.WBPPath.Get();
-                ULyraUIFrameworkLayerHost* LayerHost = Manager->GetOrCreateLayerHost(ActiveHandle->Config.UILayer);
-                ULyraUIView* LoadedView = ViewClass && LayerHost
-                    ? CreateWidget<ULyraUIView>(Manager->GetLocalPlayer(), ViewClass)
-                    : nullptr;
-                if (!LoadedView)
-                {
-                    Manager->FailOpen(ActiveHandle);
-                    return;
-                }
-
-                const ULyraUIFrameworkSettings* Settings = GetDefault<ULyraUIFrameworkSettings>();
-                const FVector2D DesignResolution = Settings ? Settings->DesignResolution : FVector2D(1920.0f, 1080.0f);
-                LoadedView->InitializeView(ActiveHandle->GetUIName(), ActiveHandle->OpenContext.Get(), ActiveHandle->Config.bUseSafeArea, ActiveHandle->Config.BlackType);
-                ActiveHandle->SetView(LoadedView);
-                LayerHost->AddView(LoadedView, ActiveHandle->Config.Presentation, ActiveHandle->Config.ZOrder, ActiveHandle->Config.BlackType, DesignResolution);
-                ActiveHandle->SetState(ELyraUIFrameworkViewState::Open);
-                if (ActiveHandle->Config.bRequestFocus)
-                {
-                    LoadedView->ActivateWidget();
-                }
-                ActiveHandle->OnOpened.Broadcast(LoadedView);
+                return;
+            }
+            ResumeInputForHandle(Active);
+            UClass* ViewClass = Active->Config.WBPPath.Get();
+            if (!ViewClass || !ViewClass->IsChildOf<ULyraUIView>() || ViewClass->HasAnyClassFlags(CLASS_Abstract))
+            {
+                FailOpen(Active);
+                return;
+            }
+            ULyraUIFrameworkLayerHost* Host = GetOrCreateLayerHost(Active->Config.UILayer);
+            ULyraUIView* View = Host ? CreateWidget<ULyraUIView>(GetLocalPlayer(), ViewClass) : nullptr;
+            if (!ActiveHandles.Contains(Active) || Active->GetState() != ELyraUIFrameworkViewState::Loading)
+            {
+                RemoveEmptyLayerHost(Active->Config.UILayer, Host);
+                return;
+            }
+            if (!View)
+            {
+                FailOpen(Active);
+                return;
+            }
+            Active->SetView(View);
+            View->InitializeView(Active->GetUIName(), Active->OpenContext, Active->Config, Active);
+            if (!ActiveHandles.Contains(Active) || Active->GetState() != ELyraUIFrameworkViewState::Loading)
+            {
+                return;
+            }
+            Active->SetState(ELyraUIFrameworkViewState::Open);
+            Host->AddView(View, Active->Config);
+            if (!ActiveHandles.Contains(Active) ||
+                (Active->GetState() != ELyraUIFrameworkViewState::Open && Active->GetState() != ELyraUIFrameworkViewState::Suspended))
+            {
+                return;
+            }
+            View->NotifyFrameworkOpened();
+            if (ActiveHandles.Contains(Active) &&
+                (Active->GetState() == ELyraUIFrameworkViewState::Open || Active->GetState() == ELyraUIFrameworkViewState::Suspended))
+            {
+                Active->OnOpened.Broadcast(View);
             }
         }));
-
-    Handle->SetStreamableHandle(MoveTemp(StreamableHandle));
+    Handle->SetStreamableHandle(Streaming);
+    if (!Streaming)
+    {
+        FailOpen(Handle);
+    }
     return Handle;
 }
 
-/** 取消未完成加载并从 RootLayout 移除指定界面。 */
-void ULyraUIFrameworkManagerSubsystem::CloseView(ULyraUIViewHandle* Handle)
+/** 关闭先标记状态再执行业务回调，关闭动画结束后才最终移除。 */
+void ULyraUIFrameworkManagerSubsystem::CloseView(ULyraUIViewHandle* Handle, bool bImmediate)
 {
     if (!Handle || !ActiveHandles.Contains(Handle))
     {
         return;
     }
-
+    if (Handle->GetState() == ELyraUIFrameworkViewState::Closing)
+    {
+        if (bImmediate) { FinalizeCloseView(Handle); }
+        return;
+    }
     Handle->SetState(ELyraUIFrameworkViewState::Closing);
     ResumeInputForHandle(Handle);
-    if (Handle->StreamableHandle.IsValid() && Handle->StreamableHandle->IsLoading())
+    if (Handle->StreamableHandle && Handle->StreamableHandle->IsLoading())
     {
         Handle->StreamableHandle->CancelHandle();
     }
-
     if (ULyraUIView* View = Handle->GetView())
     {
-        View->OnClose();
-        if (ULyraUIFrameworkLayerHost* LayerHost = LayerHosts.FindRef(Handle->Config.UILayer))
-        {
-            LayerHost->RemoveView(View);
-        }
+        View->NotifyFrameworkClosing();
+        if (!ActiveHandles.Contains(Handle)) { return; }
+        if (!bImmediate && !bShuttingDown && View->PlayCloseAnimation()) { return; }
     }
-
-    Handle->OnClosed.Broadcast(Handle->GetView());
-    Handle->SetState(ELyraUIFrameworkViewState::Closed);
-    Handle->SetView(nullptr);
-    ActiveHandles.RemoveSingle(Handle);
+    FinalizeCloseView(Handle);
 }
 
-/** 按界面对象定位句柄并关闭。 */
+/** 在回调前清除管理器所有权，允许业务安全地关闭或再次打开。 */
+void ULyraUIFrameworkManagerSubsystem::FinalizeCloseView(ULyraUIViewHandle* Handle)
+{
+    if (!Handle || !ActiveHandles.Contains(Handle)) { return; }
+    ULyraUIView* View = Handle->GetView();
+    ActiveHandles.RemoveSingle(Handle);
+    Handle->SetState(ELyraUIFrameworkViewState::Closed);
+    if (View)
+    {
+        View->ReleaseFrameworkView();
+        if (ULyraUIFrameworkLayerHost* Host = LayerHosts.FindRef(Handle->Config.UILayer))
+        {
+            Host->RemoveView(View);
+            RemoveEmptyLayerHost(Handle->Config.UILayer, Host);
+        }
+    }
+    Handle->SetView(nullptr);
+    Handle->OpenContext = nullptr;
+    Handle->StreamableHandle.Reset();
+    Handle->OnClosed.Broadcast(View);
+}
+
+/** 通过实例定位对应打开请求。 */
 void ULyraUIFrameworkManagerSubsystem::CloseViewByWidget(ULyraUIView* View)
 {
-    if (!View)
-    {
-        return;
-    }
-
-    for (ULyraUIViewHandle* Handle : ActiveHandles)
+    const TArray<TObjectPtr<ULyraUIViewHandle>> Snapshot = ActiveHandles;
+    for (ULyraUIViewHandle* Handle : Snapshot)
     {
         if (Handle && Handle->GetView() == View)
         {
@@ -175,78 +197,97 @@ void ULyraUIFrameworkManagerSubsystem::CloseViewByWidget(ULyraUIView* View)
     }
 }
 
-/** 按配置保留常驻界面或关闭全部界面。 */
-void ULyraUIFrameworkManagerSubsystem::CloseAll(bool bCloseResidentViews)
+/** 根据 Layer 遮挡同步句柄的打开和暂停状态。 */
+void ULyraUIFrameworkManagerSubsystem::NotifyViewVisibilityChanged(ULyraUIView* View, bool bVisible)
 {
-    const TArray<TObjectPtr<ULyraUIViewHandle>> HandlesToClose = ActiveHandles;
-    for (ULyraUIViewHandle* Handle : HandlesToClose)
+    for (ULyraUIViewHandle* Handle : ActiveHandles)
     {
-        if (Handle && (bCloseResidentViews || !Handle->Config.bResident))
+        if (Handle && Handle->GetView() == View && Handle->GetState() != ELyraUIFrameworkViewState::Closing)
         {
-            CloseView(Handle);
+            Handle->SetState(bVisible ? ELyraUIFrameworkViewState::Open : ELyraUIFrameworkViewState::Suspended);
+            return;
         }
     }
 }
 
-/** 从项目设置指定的 DataTable 中查找 UI 配置行。 */
+/** 使用快照关闭当前实例，默认保留配置为常驻的界面。 */
+void ULyraUIFrameworkManagerSubsystem::CloseAll(bool bCloseResidentViews)
+{
+    const TArray<TObjectPtr<ULyraUIViewHandle>> Snapshot = ActiveHandles;
+    for (ULyraUIViewHandle* Handle : Snapshot)
+    {
+        if (Handle && (bCloseResidentViews || !Handle->Config.bResident))
+        {
+            CloseView(Handle, bShuttingDown);
+        }
+    }
+}
+
+/** 配置表以行名作为主键，拒绝不兼容的行结构。 */
 const FLyraUIConfigRow* ULyraUIFrameworkManagerSubsystem::FindConfig(FName UIName) const
 {
-    const ULyraUIFrameworkSettings* Settings = GetDefault<ULyraUIFrameworkSettings>();
-    UDataTable* ConfigTable = Settings ? Settings->UIConfigTable.LoadSynchronous() : nullptr;
-    if (!ConfigTable)
+    UDataTable* Table = GetDefault<ULyraUIFrameworkSettings>()->UIConfigTable.LoadSynchronous();
+    if (!Table || Table->GetRowStruct() != FLyraUIConfigRow::StaticStruct())
     {
         return nullptr;
     }
-
-    return ConfigTable->FindRow<FLyraUIConfigRow>(UIName, TEXT("LyraUIFrameworkManagerSubsystem::FindConfig"), false);
+    return Table->FindRow<FLyraUIConfigRow>(UIName, TEXT("LyraUIFramework::FindConfig"), false);
 }
 
-/** 子系统销毁前释放仍在加载或打开的界面。 */
+/** 销毁时禁止回调新开界面，并立即取消加载和动画。 */
 void ULyraUIFrameworkManagerSubsystem::Deinitialize()
 {
+    bShuttingDown = true;
     CloseAll(true);
+    LayerHosts.Empty();
     Super::Deinitialize();
 }
 
-/** 结束失败句柄并通知监听者。 */
+/** 将失败状态写入句柄后再广播，避免失败回调影响在途请求。 */
 void ULyraUIFrameworkManagerSubsystem::FailOpen(ULyraUIViewHandle* Handle)
 {
-    if (!Handle)
-    {
-        return;
-    }
-
+    if (!Handle || !ActiveHandles.Contains(Handle)) { return; }
     ResumeInputForHandle(Handle);
-    Handle->SetState(ELyraUIFrameworkViewState::Failed);
-    Handle->OnFailed.Broadcast(Handle->GetView());
     ActiveHandles.RemoveSingle(Handle);
+    Handle->SetState(ELyraUIFrameworkViewState::Failed);
+    Handle->OpenContext = nullptr;
+    RemoveEmptyLayerHost(Handle->Config.UILayer, LayerHosts.FindRef(Handle->Config.UILayer));
+    Handle->OnFailed.Broadcast(nullptr);
 }
 
-/** 使用 CommonUI token 恢复指定句柄挂起的玩家输入。 */
+/** 成对恢复加载期间挂起的玩家输入。 */
 void ULyraUIFrameworkManagerSubsystem::ResumeInputForHandle(ULyraUIViewHandle* Handle)
 {
     if (Handle && !Handle->InputSuspendToken.IsNone())
     {
-        UCommonUIExtensions::ResumeInputForPlayer(GetLocalPlayer(), Handle->InputSuspendToken);
+        const FName Token = Handle->InputSuspendToken;
         Handle->InputSuspendToken = NAME_None;
+        UCommonUIExtensions::ResumeInputForPlayer(GetLocalPlayer(), Token);
     }
 }
 
-/** 获取已创建的宿主；缺少时将宿主压入指定 Lyra Layer。 */
+/** 在已经注册的 Lyra Layer 上创建一个内部 Canvas 宿主。 */
 ULyraUIFrameworkLayerHost* ULyraUIFrameworkManagerSubsystem::GetOrCreateLayerHost(FGameplayTag LayerTag)
 {
-    if (ULyraUIFrameworkLayerHost* ExistingHost = LayerHosts.FindRef(LayerTag))
-    {
-        return ExistingHost;
-    }
-
-    UPrimaryGameLayout* RootLayout = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer());
-    ULyraUIFrameworkLayerHost* NewHost = RootLayout
-        ? RootLayout->PushWidgetToLayerStack<ULyraUIFrameworkLayerHost>(LayerTag, ULyraUIFrameworkLayerHost::StaticClass())
+    if (ULyraUIFrameworkLayerHost* Host = LayerHosts.FindRef(LayerTag)) { return Host; }
+    UPrimaryGameLayout* Root = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer());
+    ULyraUIFrameworkLayerHost* Host = Root
+        ? Root->PushWidgetToLayerStack<ULyraUIFrameworkLayerHost>(LayerTag, ULyraUIFrameworkLayerHost::StaticClass())
         : nullptr;
-    if (NewHost)
+    if (Host) { LayerHosts.Add(LayerTag, Host); }
+    return Host;
+}
+
+/** 从 RootLayout 移除不再承载界面的空宿主。 */
+void ULyraUIFrameworkManagerSubsystem::RemoveEmptyLayerHost(FGameplayTag LayerTag, ULyraUIFrameworkLayerHost* Host)
+{
+    if (!Host || Host->HasViews()) { return; }
+    if (LayerHosts.FindRef(LayerTag) == Host)
     {
-        LayerHosts.Add(LayerTag, NewHost);
+        LayerHosts.Remove(LayerTag);
     }
-    return NewHost;
+    if (UPrimaryGameLayout* Root = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer()))
+    {
+        Root->FindAndRemoveWidgetFromLayer(Host);
+    }
 }

@@ -6,6 +6,7 @@
 #include "LyraUIFrameworkTypes.generated.h"
 
 class ULyraUIView;
+class ULyraUIViewController;
 
 /** UI 业务分类，用于表达界面在项目中的角色。 */
 UENUM(BlueprintType)
@@ -79,6 +80,10 @@ struct LYRAUIFRAMEWORK_API FLyraUIConfigRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI", meta = (AssetBundles = "Client"))
     TSoftClassPtr<ULyraUIView> WBPPath;
 
+    /** 可选业务控制器，跨项目框架不依赖具体业务 View。 */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI")
+    TSubclassOf<ULyraUIViewController> ControllerClass;
+
     /** UI 业务类型。 */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI")
     ELyraUIFrameworkType UIType = ELyraUIFrameworkType::View;
@@ -110,6 +115,10 @@ struct LYRAUIFRAMEWORK_API FLyraUIConfigRow : public FTableRowBase
     /** 是否在打开后自动请求焦点。 */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI|Behavior")
     bool bRequestFocus = true;
+
+    /** 是否使用 CommonUI 返回动作请求关闭。 */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI|Behavior")
+    bool bCloseOnBack = true;
 
     /** 是否将界面内容限制到设备安全区。 */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI|Adaptation")

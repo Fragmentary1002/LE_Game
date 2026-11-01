@@ -72,7 +72,7 @@ private:
 
     /** 打开时传入的业务对象。 */
     UPROPERTY(Transient)
-    TWeakObjectPtr<UObject> OpenContext;
+    TObjectPtr<UObject> OpenContext;
 
     /** 实际创建的 Widget。 */
     UPROPERTY(Transient)

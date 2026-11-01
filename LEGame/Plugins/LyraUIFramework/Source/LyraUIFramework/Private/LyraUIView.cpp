@@ -1,152 +1,245 @@
 #include "LyraUIView.h"
 
+#include "Animation/WidgetAnimation.h"
 #include "Blueprint/WidgetTree.h"
-#include "LyraUIFrameworkManagerSubsystem.h"
-#include "Engine/LocalPlayer.h"
 #include "Components/SafeZone.h"
-#include "Components/Widget.h"
+#include "Engine/LocalPlayer.h"
+#include "LyraUIControlBinding.h"
+#include "LyraUIFrameworkManagerSubsystem.h"
+#include "LyraUISubView.h"
+#include "LyraUIViewController.h"
+#include "LyraUIViewHandle.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LyraUIView)
 
-/** 记录界面标识与打开上下文。 */
-void ULyraUIView::InitializeView(FName InUIName, UObject* InOpenContext, bool bInUseSafeArea, ELyraUIFrameworkBlackType InBlackType)
+/** 确保上下文和句柄就绪后才激活界面。 */
+ULyraUIView::ULyraUIView(const FObjectInitializer& ObjectInitializer) : Super(ObjectInitializer)
+{
+    bAutoActivate = false;
+    bIsBackHandler = true;
+}
+
+/** 保存配置并在控件构建前完成安全区和控制器初始化。 */
+void ULyraUIView::InitializeView(FName InUIName, UObject* InOpenContext, const FLyraUIConfigRow& Config, ULyraUIViewHandle* InHandle)
 {
     UIName = InUIName;
     OpenContext = InOpenContext;
-    bUseSafeArea = bInUseSafeArea;
-    BlackType = InBlackType;
-    ApplySafeArea();
+    ViewHandle = InHandle;
+    bRequestFocus = Config.bRequestFocus;
+    bIsBackHandler = Config.bCloseOnBack;
+    ControlBinding = NewObject<ULyraUIControlBinding>(this);
+    if (Config.bUseSafeArea)
+    {
+        ApplySafeArea();
+    }
+    if (Config.ControllerClass)
+    {
+        Controller = NewObject<ULyraUIViewController>(this, Config.ControllerClass);
+        Controller->InitializeController(this, InOpenContext);
+    }
 }
 
-/** 更新框架可见状态并触发生命周期回调。 */
+/** 更新逻辑可见性并成对更新 CommonUI 激活和映射状态。 */
 void ULyraUIView::SetFrameworkVisible(bool bVisible)
 {
-    if (bFrameworkVisible == bVisible)
+    if (bReleased || bClosing || bFrameworkVisible == bVisible)
     {
         return;
     }
-
     bFrameworkVisible = bVisible;
-    SetVisibility(bVisible ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
-    if (bVisible)
     {
-        OnResume();
-    }
-    else
-    {
-        OnPause();
-    }
-}
-
-/** 通过所属 LocalPlayer 的 UI Manager 请求关闭。 */
-void ULyraUIView::RequestClose()
-{
-    if (ULocalPlayer* LocalPlayer = GetOwningLocalPlayer())
-    {
-        if (ULyraUIFrameworkManagerSubsystem* Manager = LocalPlayer->GetSubsystem<ULyraUIFrameworkManagerSubsystem>())
+        TGuardValue<bool> ActivationGuard(bUpdatingActivation, true);
+        if (bVisible && bOpened)
         {
-            Manager->CloseViewByWidget(this);
+            ActivateWidget();
+        }
+        else if (!bVisible)
+        {
+            DeactivateWidget();
+        }
+    }
+    SetVisibility(bVisible ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+    if (ULocalPlayer* Player = GetOwningLocalPlayer())
+    {
+        if (ULyraUIFrameworkManagerSubsystem* Manager = Player->GetSubsystem<ULyraUIFrameworkManagerSubsystem>())
+        {
+            Manager->NotifyViewVisibilityChanged(this, bVisible);
+        }
+    }
+    if (bOpened)
+    {
+        if (bVisible)
+        {
+            if (Controller) { Controller->OnResume(); }
+            if (!bClosing && !bReleased) { OnResume(); }
+        }
+        else
+        {
+            if (Controller) { Controller->OnPause(); }
+            if (!bClosing && !bReleased) { OnPause(); }
         }
     }
 }
 
-/** 确保嵌入宿主的界面也执行一次首次打开生命周期。 */
+/** 使用保存的句柄关闭该实例，不依赖全局 ViewClass 查找。 */
+void ULyraUIView::RequestClose()
+{
+    if (ULyraUIViewHandle* Handle = ViewHandle.Get())
+    {
+        Handle->Close();
+    }
+}
+
+/** 打开业务前初始化子界面，生命周期回调后重新检查关闭状态。 */
 void ULyraUIView::NotifyFrameworkOpened()
 {
-    if (!bOpened)
+    if (bOpened || bReleased || bClosing)
     {
-        bOpened = true;
-        OnOpen();
+        return;
+    }
+    bOpened = true;
+    TArray<TObjectPtr<ULyraUISubView>> DiscoveredSubViews;
+    WidgetTree->ForEachWidget([this, &DiscoveredSubViews](UWidget* Widget)
+    {
+        if (ULyraUISubView* SubView = Cast<ULyraUISubView>(Widget))
+        {
+            DiscoveredSubViews.AddUnique(SubView);
+        }
+    });
+    for (ULyraUISubView* SubView : DiscoveredSubViews)
+    {
+        if (bClosing || bReleased) { return; }
+        SubViews.AddUnique(SubView);
+        SubView->InitializeSubView(this);
+        if (bClosing || bReleased) { return; }
+    }
+    if (bClosing || bReleased) { return; }
+    OnInit();
+    if (bClosing || bReleased) { return; }
+    OnAddListener();
+    if (bClosing || bReleased) { return; }
+    if (Controller) { Controller->OnOpen(); }
+    if (bClosing || bReleased) { return; }
+    OnOpen();
+    if (bClosing || bReleased) { return; }
+    if (bFrameworkVisible)
+    {
+        TGuardValue<bool> ActivationGuard(bUpdatingActivation, true);
+        ActivateWidget();
+        if (bRequestFocus) { RequestRefreshFocus(); }
         PlayOpenAnimation();
     }
 }
 
-/** 播放打开动画；未配置动画时返回 false。 */
+/** 关闭开始后不再发送暂停回调，防止业务重复解除监听。 */
+void ULyraUIView::NotifyFrameworkClosing()
+{
+    if (bClosing || bReleased) { return; }
+    bClosing = true;
+    OnRemoveListener();
+    if (bReleased) { return; }
+    OnClose();
+    if (Controller && !bReleased) { Controller->OnClose(); }
+}
+
+/** 逻辑释放与 Slate 重建分离，确保置顶和重建不会丢失资源。 */
+void ULyraUIView::ReleaseFrameworkView()
+{
+    if (bReleased) { return; }
+    bReleased = true;
+    bClosing = true;
+    StopAllAnimations();
+    if (CloseAnimation)
+    {
+        FWidgetAnimationDynamicEvent Event;
+        Event.BindDynamic(this, &ThisClass::HandleCloseAnimationFinished);
+        UnbindFromAnimationFinished(CloseAnimation, Event);
+    }
+    TGuardValue<bool> ActivationGuard(bUpdatingActivation, true);
+    DeactivateWidget();
+    for (ULyraUISubView* SubView : SubViews)
+    {
+        if (SubView) { SubView->ReleaseSubView(); }
+    }
+    SubViews.Empty();
+    if (ControlBinding) { ControlBinding->UnbindAll(); }
+    if (Controller) { Controller->OnRelease(); }
+    OnRelease();
+    Controller = nullptr;
+    OpenContext = nullptr;
+    ViewHandle.Reset();
+}
+
+/** 可选打开动画在业务已初始化后播放。 */
 bool ULyraUIView::PlayOpenAnimation()
 {
-    if (!OpenAnimation)
-    {
-        return false;
-    }
-
+    if (!OpenAnimation || bClosing || bReleased) { return false; }
     PlayAnimation(OpenAnimation);
     return true;
 }
 
-/** 播放关闭动画并登记完成后的关闭回调。 */
+/** 关闭动画只绑定一次完成事件，并停止打开动画避免竞争。 */
 bool ULyraUIView::PlayCloseAnimation()
 {
-    if (!CloseAnimation || bClosingWithAnimation)
-    {
-        return false;
-    }
-
+    if (!CloseAnimation || bReleased || !bFrameworkVisible) { return false; }
+    if (bClosingWithAnimation) { return true; }
     bClosingWithAnimation = true;
-    FWidgetAnimationDynamicEvent FinishedEvent;
-    FinishedEvent.BindDynamic(this, &ThisClass::HandleCloseAnimationFinished);
-    BindToAnimationFinished(CloseAnimation, FinishedEvent);
+    StopAllAnimations();
+    FWidgetAnimationDynamicEvent Event;
+    Event.BindDynamic(this, &ThisClass::HandleCloseAnimationFinished);
+    UnbindFromAnimationFinished(CloseAnimation, Event);
+    BindToAnimationFinished(CloseAnimation, Event);
     PlayAnimation(CloseAnimation);
     return true;
 }
 
-/** 动画完成后清理状态并请求关闭界面。 */
+/** 通过立即关闭入口完成已播放结束的关闭动画。 */
 void ULyraUIView::HandleCloseAnimationFinished()
 {
     bClosingWithAnimation = false;
-    RequestClose();
-}
-
-/** Widget 构造时只执行一次初始化事件。 */
-void ULyraUIView::NativeConstruct()
-{
-    Super::NativeConstruct();
-
-    if (!bInitialized)
+    if (ULocalPlayer* Player = GetOwningLocalPlayer())
     {
-        bInitialized = true;
-        OnInit();
+        if (ULyraUIFrameworkManagerSubsystem* Manager = Player->GetSubsystem<ULyraUIFrameworkManagerSubsystem>())
+        {
+            Manager->CloseView(ViewHandle.Get(), true);
+        }
     }
 }
 
-/** 将蓝图内容根节点包装进 SafeZone，适配设备安全区。 */
-void ULyraUIView::ApplySafeArea()
+/** 保留蓝图自定义返回处理，默认交给统一关闭流程。 */
+bool ULyraUIView::NativeOnHandleBackAction()
 {
-    if (bUseSafeArea && WidgetTree && WidgetTree->RootWidget && !Cast<USafeZone>(WidgetTree->RootWidget))
+    if (!bIsBackHandler) { return false; }
+    if (!BP_OnHandleBackAction()) { RequestClose(); }
+    return true;
+}
+
+/** 外部直接停用视为关闭，内部遮挡停用由保护标记排除。 */
+void ULyraUIView::NativeOnDeactivated()
+{
+    Super::NativeOnDeactivated();
+    if (!bUpdatingActivation && bOpened && !bClosing && !bReleased)
     {
-        UWidget* ContentWidget = WidgetTree->RootWidget;
-        USafeZone* SafeZone = WidgetTree->ConstructWidget<USafeZone>(USafeZone::StaticClass(), TEXT("UIFrameworkSafeZone"));
-        SafeZone->SetSidesToPad(true, true, true, true);
-        SafeZone->SetContent(ContentWidget);
-        WidgetTree->RootWidget = SafeZone;
+        RequestClose();
     }
 }
 
-/** Widget 销毁时通知业务释放界面资源。 */
+/** Slate 生命周期不触发业务 OnRelease，业务由 Manager 显式回收。 */
 void ULyraUIView::NativeDestruct()
 {
-    OnRelease();
+    TGuardValue<bool> ActivationGuard(bUpdatingActivation, true);
     Super::NativeDestruct();
 }
 
-/** 激活界面并区分首次打开和覆盖恢复。 */
-void ULyraUIView::NativeOnActivated()
+/** 安全区容器只包裹一次，UMG 原生控件负责响应设备变化。 */
+void ULyraUIView::ApplySafeArea()
 {
-    Super::NativeOnActivated();
-
-    if (!bOpened)
+    if (WidgetTree && WidgetTree->RootWidget && !WidgetTree->RootWidget->IsA<USafeZone>())
     {
-        NotifyFrameworkOpened();
+        UWidget* Content = WidgetTree->RootWidget;
+        USafeZone* SafeZone = WidgetTree->ConstructWidget<USafeZone>();
+        SafeZone->SetSidesToPad(true, true, true, true);
+        SafeZone->SetContent(Content);
+        WidgetTree->RootWidget = SafeZone;
     }
-    else if (bHasBeenActivated)
-    {
-        OnResume();
-    }
-    bHasBeenActivated = true;
-}
-
-/** 停用界面时通知业务暂停。 */
-void ULyraUIView::NativeOnDeactivated()
-{
-    OnPause();
-    Super::NativeOnDeactivated();
 }

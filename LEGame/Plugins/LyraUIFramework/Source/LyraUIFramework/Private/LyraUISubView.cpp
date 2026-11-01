@@ -18,7 +18,7 @@ void ULyraUISubView::InitializeSubView(ULyraUIView* InOwningView)
 /** 显示子界面并启用其事件监听。 */
 void ULyraUISubView::OpenSubView()
 {
-    if (bSubViewOpen)
+    if (bSubViewOpen || bReleased || !bInitialized || !OwningView.IsValid())
     {
         return;
     }
@@ -26,7 +26,7 @@ void ULyraUISubView::OpenSubView()
     bSubViewOpen = true;
     SetVisibility(ESlateVisibility::SelfHitTestInvisible);
     OnAddListener();
-    OnOpen();
+    if (bSubViewOpen && !bReleased) { OnOpen(); }
 }
 
 /** 隐藏子界面并停用其事件监听。 */
@@ -43,10 +43,19 @@ void ULyraUISubView::CloseSubView()
     SetVisibility(ESlateVisibility::Collapsed);
 }
 
-/** 销毁时关闭子界面并通知业务释放资源。 */
+/** 父界面最终释放时成对结束业务资源生命周期。 */
+void ULyraUISubView::ReleaseSubView()
+{
+    if (bReleased) { return; }
+    bReleased = true;
+    CloseSubView();
+    OnRelease();
+    OwningView.Reset();
+}
+
+/** Slate 移除仅关闭监听，最终业务释放由父界面负责。 */
 void ULyraUISubView::NativeDestruct()
 {
     CloseSubView();
-    OnRelease();
     Super::NativeDestruct();
 }

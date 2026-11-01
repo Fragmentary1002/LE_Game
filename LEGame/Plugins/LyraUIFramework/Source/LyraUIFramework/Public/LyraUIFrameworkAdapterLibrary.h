@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Layout/Margin.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "LyraUIFrameworkTypes.h"
 #include "LyraUIFrameworkAdapterLibrary.generated.h"

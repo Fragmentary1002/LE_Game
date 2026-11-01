@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "LyraUIFrameworkManagerSubsystem.generated.h"
 
@@ -23,11 +24,14 @@ public:
 
     /** 关闭指定打开句柄对应的界面。 */
     UFUNCTION(BlueprintCallable, Category = "Lyra UI")
-    void CloseView(ULyraUIViewHandle* Handle);
+    void CloseView(ULyraUIViewHandle* Handle, bool bImmediate = false);
 
     /** 根据界面实例查找并关闭对应句柄。 */
     UFUNCTION(BlueprintCallable, Category = "Lyra UI")
     void CloseViewByWidget(ULyraUIView* View);
+
+    /** 根据 Layer 遮挡同步句柄的打开和暂停状态。 */
+    void NotifyViewVisibilityChanged(ULyraUIView* View, bool bVisible);
 
     /** 关闭当前玩家的所有非常驻界面。 */
     UFUNCTION(BlueprintCallable, Category = "Lyra UI")
@@ -43,11 +47,17 @@ private:
     /** 将失败状态写入句柄并通知调用方。 */
     void FailOpen(ULyraUIViewHandle* Handle);
 
+    /** 完成关闭流程并释放空闲 Layer 宿主。 */
+    void FinalizeCloseView(ULyraUIViewHandle* Handle);
+
     /** 恢复异步加载前挂起的玩家输入。 */
     void ResumeInputForHandle(ULyraUIViewHandle* Handle);
 
     /** 获取或在 Lyra RootLayout 中创建指定 Layer 的持久宿主。 */
     ULyraUIFrameworkLayerHost* GetOrCreateLayerHost(FGameplayTag LayerTag);
+
+    /** 从 RootLayout 移除不再承载界面的空宿主。 */
+    void RemoveEmptyLayerHost(FGameplayTag LayerTag, ULyraUIFrameworkLayerHost* Host);
 
     /** 正在加载或已打开的界面句柄。 */
     UPROPERTY(Transient)
@@ -56,4 +66,7 @@ private:
     /** 每个 Lyra Layer 对应的内部 View 宿主。 */
     UPROPERTY(Transient)
     TMap<FGameplayTag, TObjectPtr<ULyraUIFrameworkLayerHost>> LayerHosts;
+
+    /** 子系统退出期间拒绝业务回调重新打开界面。 */
+    bool bShuttingDown = false;
 };

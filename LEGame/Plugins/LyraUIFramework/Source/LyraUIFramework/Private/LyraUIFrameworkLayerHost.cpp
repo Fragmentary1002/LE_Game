@@ -1,143 +1,156 @@
 #include "LyraUIFrameworkLayerHost.h"
 
+#include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
-#include "Components/Border.h"
 #include "LyraUIFrameworkAdapterLibrary.h"
+#include "LyraUIFrameworkSettings.h"
 #include "LyraUIView.h"
-#include "Blueprint/WidgetTree.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LyraUIFrameworkLayerHost)
 
-/** 在宿主初始化时创建全屏 Canvas 根控件。 */
+/** 创建全屏宿主并裁切固定宽高适配产生的溢出。 */
 void ULyraUIFrameworkLayerHost::NativeOnInitialized()
 {
     Super::NativeOnInitialized();
-
     CanvasPanel = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("UIFrameworkLayerCanvas"));
     WidgetTree->RootWidget = CanvasPanel;
     SetClipping(EWidgetClipping::ClipToBounds);
 }
 
-/** 将界面添加到 Canvas 并刷新层级和遮挡状态。 */
-void ULyraUIFrameworkLayerHost::AddView(ULyraUIView* View, ELyraUIFrameworkViewPresentation Presentation, int32 ZOrder, ELyraUIFrameworkBlackType BlackType, FVector2D DesignResolution)
+/** 将界面和配置作为同一条记录保存。 */
+void ULyraUIFrameworkLayerHost::AddView(ULyraUIView* View, const FLyraUIConfigRow& Config)
 {
-    if (!IsValid(View) || !CanvasPanel || Views.Contains(View))
+    if (!IsValid(View) || !CanvasPanel || Entries.ContainsByPredicate([View](const FLyraUIFrameworkLayerEntry& Entry) { return Entry.View == View; }))
     {
         return;
     }
 
-    Views.Add(View);
-    Presentations.Add(Presentation);
-    ZOrders.Add(ZOrder);
-    BlackTypes.Add(BlackType);
-    DesignResolutions.Add(DesignResolution);
-
-    UBorder* Background = nullptr;
-    if (BlackType != ELyraUIFrameworkBlackType::None)
+    FLyraUIFrameworkLayerEntry Entry;
+    Entry.View = View;
+    Entry.Config = Config;
+    Entry.Order = ++NextOrder;
+    if (Config.BlackType != ELyraUIFrameworkBlackType::None)
     {
-        Background = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-        CanvasPanel->AddChildToCanvas(Background);
-        Background->SetBrushColor(FLinearColor::Black);
+        Entry.Background = WidgetTree->ConstructWidget<UBorder>();
+        Entry.Background->SetBrushColor(FLinearColor::Black);
+        Entry.Background->SetVisibility(ESlateVisibility::HitTestInvisible);
+        CanvasPanel->AddChildToCanvas(Entry.Background);
     }
-    BlackBarBackgrounds.Add(Background);
+    Entries.Add(Entry);
     CanvasPanel->AddChildToCanvas(View);
-    View->NotifyFrameworkOpened();
     RefreshViews();
 }
 
-/** 移除界面及其排序数据，并刷新剩余界面。 */
+/** 先移除记录，再释放 Slate 子项，避免回调查询到过期记录。 */
 void ULyraUIFrameworkLayerHost::RemoveView(ULyraUIView* View)
 {
-    const int32 Index = Views.IndexOfByKey(View);
+    const int32 Index = Entries.IndexOfByPredicate([View](const FLyraUIFrameworkLayerEntry& Entry) { return Entry.View == View; });
     if (Index == INDEX_NONE)
     {
         return;
     }
-
-    if (CanvasPanel)
+    const FLyraUIFrameworkLayerEntry Entry = Entries[Index];
+    Entries.RemoveAt(Index);
+    if (Entry.Background)
     {
-        if (BlackBarBackgrounds[Index])
-        {
-            CanvasPanel->RemoveChild(BlackBarBackgrounds[Index]);
-        }
-        CanvasPanel->RemoveChild(View);
+        CanvasPanel->RemoveChild(Entry.Background);
     }
-    Views.RemoveAt(Index);
-    Presentations.RemoveAt(Index);
-    ZOrders.RemoveAt(Index);
-    BlackBarBackgrounds.RemoveAt(Index);
-    BlackTypes.RemoveAt(Index);
-    DesignResolutions.RemoveAt(Index);
+    CanvasPanel->RemoveChild(View);
     RefreshViews();
 }
 
-/** 视口尺寸变化时重新计算自适应黑边。 */
+/** 置顶采用运行时排序值，不改变配置或拆卸控件树。 */
+void ULyraUIFrameworkLayerHost::BringViewToFront(ULyraUIView* View)
+{
+    int32 HighestZOrder = MIN_int32;
+    for (const FLyraUIFrameworkLayerEntry& Entry : Entries)
+    {
+        HighestZOrder = FMath::Max(HighestZOrder, Entry.Config.ZOrder);
+    }
+    for (FLyraUIFrameworkLayerEntry& Entry : Entries)
+    {
+        if (Entry.View == View)
+        {
+            Entry.Config.ZOrder = HighestZOrder;
+            Entry.Order = ++NextOrder;
+            break;
+        }
+    }
+    RefreshViews();
+}
+
+/** 布局尺寸变化或重入刷新被延后时重算黑边。 */
 void ULyraUIFrameworkLayerHost::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
     Super::NativeTick(MyGeometry, InDeltaTime);
-
-    const FVector2D ViewportSize = MyGeometry.GetLocalSize();
-    if (!ViewportSize.Equals(CachedViewportSize, 1.0f))
+    const FVector2D Size = MyGeometry.GetLocalSize();
+    if (bRefreshRequested || !Size.Equals(CachedViewportSize, 0.5f))
     {
-        CachedViewportSize = ViewportSize;
+        CachedViewportSize = Size;
         RefreshViews();
     }
 }
 
-/** 按配置排序 Canvas 子项并隐藏被更高全屏界面遮挡的内容。 */
+/** 完成所有槽位写入后再回调业务，业务修改数组不会破坏本轮遍历。 */
 void ULyraUIFrameworkLayerHost::RefreshViews()
 {
-    const int32 Count = Views.Num();
-    if (Count == 0 || Presentations.Num() != Count || ZOrders.Num() != Count || BlackBarBackgrounds.Num() != Count ||
-        BlackTypes.Num() != Count || DesignResolutions.Num() != Count)
+    if (bRefreshing)
     {
+        bRefreshRequested = true;
         return;
     }
-
-    TArray<int32> SortedIndices;
-    SortedIndices.Reserve(Count);
-    for (int32 Index = 0; Index < Count; ++Index)
+    TGuardValue<bool> RefreshGuard(bRefreshing, true);
+    bRefreshRequested = false;
+    TArray<FLyraUIFrameworkLayerEntry> Snapshot = Entries;
+    Snapshot.Sort([](const FLyraUIFrameworkLayerEntry& A, const FLyraUIFrameworkLayerEntry& B)
     {
-        SortedIndices.Add(Index);
-    }
-    SortedIndices.Sort([this](int32 Left, int32 Right)
-    {
-        return ZOrders[Left] == ZOrders[Right] ? Left < Right : ZOrders[Left] < ZOrders[Right];
+        return A.Config.ZOrder == B.Config.ZOrder ? A.Order < B.Order : A.Config.ZOrder < B.Config.ZOrder;
     });
-
-    int32 HighestFullScreenIndex = INDEX_NONE;
-    for (int32 SortedIndex = 0; SortedIndex < SortedIndices.Num(); ++SortedIndex)
+    int32 LastFullScreen = INDEX_NONE;
+    for (int32 Index = 0; Index < Snapshot.Num(); ++Index)
     {
-        if (Presentations[SortedIndices[SortedIndex]] == ELyraUIFrameworkViewPresentation::FullScreen)
+        if (Snapshot[Index].Config.Presentation == ELyraUIFrameworkViewPresentation::FullScreen)
         {
-            HighestFullScreenIndex = SortedIndex;
+            LastFullScreen = Index;
         }
     }
-
-    for (int32 SortedIndex = 0; SortedIndex < SortedIndices.Num(); ++SortedIndex)
+    const FVector2D DesignSize = GetDefault<ULyraUIFrameworkSettings>()->DesignResolution;
+    for (int32 Index = 0; Index < Snapshot.Num(); ++Index)
     {
-        const int32 ViewIndex = SortedIndices[SortedIndex];
-        if (ULyraUIView* View = Views[ViewIndex])
+        const FLyraUIFrameworkLayerEntry& Entry = Snapshot[Index];
+        const bool bVisible = LastFullScreen == INDEX_NONE || Index >= LastFullScreen;
+        if (Entry.Background)
         {
-            const int32 CanvasZOrder = SortedIndex * 2;
-            if (UBorder* Background = BlackBarBackgrounds[ViewIndex])
+            Entry.Background->SetVisibility(bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+            if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Entry.Background->Slot))
             {
-                if (UCanvasPanelSlot* BackgroundSlot = Cast<UCanvasPanelSlot>(Background->Slot))
-                {
-                    BackgroundSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
-                    BackgroundSlot->SetOffsets(FMargin(0.0f));
-                    BackgroundSlot->SetZOrder(CanvasZOrder);
-                }
+                Slot->SetAnchors(FAnchors(0, 0, 1, 1));
+                Slot->SetOffsets(FMargin(0));
+                Slot->SetZOrder(Index * 2);
             }
-            if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(View->Slot))
+        }
+        if (Entry.View)
+        {
+            if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Entry.View->Slot))
             {
-                CanvasSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
-                const FMargin Padding = ULyraUIFrameworkAdapterLibrary::CalculateBlackBarPadding(CachedViewportSize, DesignResolutions[ViewIndex], BlackTypes[ViewIndex]);
-                CanvasSlot->SetOffsets(FMargin(Padding.Left, Padding.Top, -Padding.Right, -Padding.Bottom));
-                CanvasSlot->SetZOrder(CanvasZOrder + 1);
+                Slot->SetAnchors(FAnchors(0, 0, 1, 1));
+                Slot->SetOffsets(ULyraUIFrameworkAdapterLibrary::CalculateBlackBarPadding(CachedViewportSize, DesignSize, Entry.Config.BlackType));
+                Slot->SetZOrder(Index * 2 + 1);
             }
-            View->SetFrameworkVisible(HighestFullScreenIndex == INDEX_NONE || SortedIndex >= HighestFullScreenIndex);
+        }
+    }
+    for (int32 Index = 0; Index < Snapshot.Num(); ++Index)
+    {
+        ULyraUIView* View = Snapshot[Index].View;
+        if (IsValid(View) && Entries.ContainsByPredicate([View](const FLyraUIFrameworkLayerEntry& Entry) { return Entry.View == View; }))
+        {
+            View->SetFrameworkVisible(LastFullScreen == INDEX_NONE || Index >= LastFullScreen);
+            if (bRefreshRequested)
+            {
+                break;
+            }
         }
     }
 }

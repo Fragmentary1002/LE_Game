@@ -24,6 +24,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Lyra UI|SubView")
     void CloseSubView();
 
+    /** 父界面释放时显式清理业务，不受 Slate 重建次数影响。 */
+    void ReleaseSubView();
+
     /** 获取所属的父界面。 */
     UFUNCTION(BlueprintPure, Category = "Lyra UI|SubView")
     ULyraUIView* GetOwningView() const { return OwningView.Get(); }
@@ -67,4 +70,7 @@ private:
 
     /** 标记子界面是否打开。 */
     bool bSubViewOpen = false;
+
+    /** 保证逻辑释放只发送一次。 */
+    bool bReleased = false;
 };

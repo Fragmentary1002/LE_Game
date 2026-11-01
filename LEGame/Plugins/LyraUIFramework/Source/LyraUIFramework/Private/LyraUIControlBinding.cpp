@@ -12,6 +12,11 @@ bool ULyraUIControlBinding::BindButton(UButton* Button, UObject* Target, FName F
         return false;
     }
 
+    if (Target->FindFunction(FunctionName)->NumParms != 0)
+    {
+        return false;
+    }
+
     FScriptDelegate Delegate;
     Delegate.BindUFunction(Target, FunctionName);
 
