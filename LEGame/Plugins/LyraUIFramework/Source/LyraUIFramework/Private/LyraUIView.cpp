@@ -3,12 +3,17 @@
 #include "Animation/WidgetAnimation.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/SafeZone.h"
+#include "Components/Image.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Engine/LocalPlayer.h"
 #include "LyraUIControlBinding.h"
 #include "LyraUIFrameworkManagerSubsystem.h"
+#include "LyraUIFrameworkModelPreviewActor.h"
+#include "LyraUIFrameworkWidgetCreationLibrary.h"
 #include "LyraUISubView.h"
 #include "LyraUIViewController.h"
 #include "LyraUIViewHandle.h"
+#include "Engine/World.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LyraUIView)
 
@@ -90,6 +95,68 @@ void ULyraUIView::RequestClose()
     }
 }
 
+/** 在当前本地玩家的 UIExtension 插槽注册一个界面子控件。 */
+bool ULyraUIView::RegisterWidgetExtension(FGameplayTag ExtensionPointTag, TSubclassOf<UUserWidget> WidgetClass, int32 Priority)
+{
+    ULocalPlayer* LocalPlayer = GetOwningLocalPlayer();
+    UWorld* World = GetWorld();
+    UUIExtensionSubsystem* ExtensionSubsystem = World ? World->GetSubsystem<UUIExtensionSubsystem>() : nullptr;
+    if (!LocalPlayer || !ExtensionSubsystem || !ExtensionPointTag.IsValid() || !WidgetClass)
+    {
+        return false;
+    }
+    FUIExtensionHandle Handle = ExtensionSubsystem->RegisterExtensionAsWidgetForContext(ExtensionPointTag, LocalPlayer, WidgetClass, Priority);
+    if (!Handle.IsValid())
+    {
+        return false;
+    }
+    UIExtensionHandles.Add(MoveTemp(Handle));
+    return true;
+}
+
+/** 使用项目控件工厂为当前 WidgetTree 创建 Image。 */
+UImage* ULyraUIView::CreateFrameworkImage(FName WidgetName)
+{
+    return ULyraUIFrameworkWidgetCreationLibrary::CreateImage(WidgetTree, WidgetName);
+}
+
+/** 使用项目控件工厂为当前 WidgetTree 创建任意 UWidget 子类。 */
+UWidget* ULyraUIView::CreateFrameworkWidget(TSubclassOf<UWidget> WidgetClass, FName WidgetName)
+{
+    return ULyraUIFrameworkWidgetCreationLibrary::CreateWidget(WidgetTree, WidgetClass, WidgetName);
+}
+
+/** 使用项目控件工厂为当前 WidgetTree 创建 TextBlock。 */
+UTextBlock* ULyraUIView::CreateFrameworkTextBlock(FName WidgetName)
+{
+    return ULyraUIFrameworkWidgetCreationLibrary::CreateTextBlock(WidgetTree, WidgetName);
+}
+
+/** 创建模型预览 Actor 并将 RenderTarget 绑定到指定 Image。 */
+ALyraUIFrameworkModelPreviewActor* ULyraUIView::CreateModelPreview(AActor* ModelActor, UImage* TargetImage, int32 Width, int32 Height)
+{
+    UWorld* World = GetWorld();
+    if (!World || !IsValid(ModelActor) || !IsValid(TargetImage))
+    {
+        return nullptr;
+    }
+    ALyraUIFrameworkModelPreviewActor* PreviewActor = World->SpawnActor<ALyraUIFrameworkModelPreviewActor>();
+    if (!PreviewActor)
+    {
+        return nullptr;
+    }
+    PreviewActor->SetPreviewActor(ModelActor, Width, Height);
+    UTextureRenderTarget2D* RenderTarget = PreviewActor->GetRenderTarget();
+    if (!RenderTarget)
+    {
+        PreviewActor->Destroy();
+        return nullptr;
+    }
+    ModelPreviewActors.Add(PreviewActor);
+    TargetImage->SetBrushResourceObject(RenderTarget);
+    return PreviewActor;
+}
+
 /** 打开业务前初始化子界面，生命周期回调后重新检查关闭状态。 */
 void ULyraUIView::NotifyFrameworkOpened()
 {
@@ -162,6 +229,16 @@ void ULyraUIView::ReleaseFrameworkView()
         if (SubView) { SubView->ReleaseSubView(); }
     }
     SubViews.Empty();
+    for (FUIExtensionHandle& ExtensionHandle : UIExtensionHandles)
+    {
+        ExtensionHandle.Unregister();
+    }
+    UIExtensionHandles.Empty();
+    for (ALyraUIFrameworkModelPreviewActor* PreviewActor : ModelPreviewActors)
+    {
+        if (IsValid(PreviewActor)) { PreviewActor->Destroy(); }
+    }
+    ModelPreviewActors.Empty();
     if (ControlBinding) { ControlBinding->UnbindAll(); }
     if (Controller) { Controller->OnRelease(); }
     OnRelease();

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "CommonActivatableWidget.h"
+#include "UIExtensionSystem.h"
 #include "LyraUIFrameworkTypes.h"
 #include "LyraUIView.generated.h"
 
@@ -10,6 +11,10 @@ class ULyraUIControlBinding;
 class ULyraUISubView;
 class ULyraUIViewController;
 class ULyraUIViewHandle;
+class ALyraUIFrameworkModelPreviewActor;
+class AActor;
+class UImage;
+class UTextBlock;
 
 /** 实际业务界面；业务生命周期独立于 Slate 的重建和销毁。 */
 UCLASS(Abstract, BlueprintType, Blueprintable)
@@ -43,6 +48,26 @@ public:
     /** 请求通过 Manager 播放关闭动画并移除实例。 */
     UFUNCTION(BlueprintCallable, Category = "Lyra UI")
     void RequestClose();
+
+    /** 在当前本地玩家的 UIExtension 插槽注册一个界面子控件。 */
+    UFUNCTION(BlueprintCallable, Category = "Lyra UI|Extension", meta = (Categories = "UI.Extension"))
+    bool RegisterWidgetExtension(FGameplayTag ExtensionPointTag, TSubclassOf<UUserWidget> WidgetClass, int32 Priority = 0);
+
+    /** 使用项目控件工厂为当前 WidgetTree 创建 Image。 */
+    UFUNCTION(BlueprintCallable, Category = "Lyra UI|Creation")
+    UImage* CreateFrameworkImage(FName WidgetName);
+
+    /** 使用项目控件工厂为当前 WidgetTree 创建任意 UWidget 子类。 */
+    UFUNCTION(BlueprintCallable, Category = "Lyra UI|Creation")
+    UWidget* CreateFrameworkWidget(TSubclassOf<UWidget> WidgetClass, FName WidgetName);
+
+    /** 使用项目控件工厂为当前 WidgetTree 创建 TextBlock。 */
+    UFUNCTION(BlueprintCallable, Category = "Lyra UI|Creation")
+    UTextBlock* CreateFrameworkTextBlock(FName WidgetName);
+
+    /** 创建模型预览 Actor 并将 RenderTarget 绑定到指定 Image。 */
+    UFUNCTION(BlueprintCallable, Category = "Lyra UI|Model Preview")
+    ALyraUIFrameworkModelPreviewActor* CreateModelPreview(AActor* ModelActor, UImage* TargetImage, int32 Width = 512, int32 Height = 512);
 
     /** 完成一次业务初始化和打开。 */
     void NotifyFrameworkOpened();
@@ -129,6 +154,14 @@ private:
 
     UPROPERTY(Transient)
     TArray<TObjectPtr<ULyraUISubView>> SubViews;
+
+    /** 当前 View 注册的扩展句柄，释放界面时逐一注销。 */
+    UPROPERTY(Transient)
+    TArray<FUIExtensionHandle> UIExtensionHandles;
+
+    /** 由当前 View 创建并负责销毁的模型预览 Actor。 */
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<ALyraUIFrameworkModelPreviewActor>> ModelPreviewActors;
 
     UPROPERTY(Transient)
     TWeakObjectPtr<ULyraUIViewHandle> ViewHandle;

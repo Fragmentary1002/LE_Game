@@ -6,6 +6,7 @@
 #include "Engine/DataTable.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/StreamableManager.h"
+#include "GameFramework/PlayerController.h"
 #include "LyraUIFrameworkLayerHost.h"
 #include "LyraUIFrameworkSettings.h"
 #include "LyraUIFrameworkTypes.h"
@@ -95,7 +96,8 @@ ULyraUIViewHandle* ULyraUIFrameworkManagerSubsystem::OpenView(FName UIName, UObj
                 return;
             }
             ULyraUIFrameworkLayerHost* Host = GetOrCreateLayerHost(Active->Config.UILayer);
-            ULyraUIView* View = Host ? CreateWidget<ULyraUIView>(GetLocalPlayer(), ViewClass) : nullptr;
+            APlayerController* PlayerController = GetLocalPlayer() ? GetLocalPlayer()->GetPlayerController() : nullptr;
+            ULyraUIView* View = Host && PlayerController ? CreateWidget<ULyraUIView>(PlayerController, ViewClass) : nullptr;
             if (!ActiveHandles.Contains(Active) || Active->GetState() != ELyraUIFrameworkViewState::Loading)
             {
                 RemoveEmptyLayerHost(Active->Config.UILayer, Host);

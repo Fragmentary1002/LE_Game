@@ -6,6 +6,7 @@
 #include "LyraUIFrameworkSettings.generated.h"
 
 class UDataTable;
+class ULyraUIFrameworkWidgetFactory;
 
 /** Lyra UI Framework 的项目级配置。 */
 UCLASS(config = Game, defaultconfig, meta = (DisplayName = "Lyra UI Framework"))
@@ -17,6 +18,10 @@ public:
     /** UI 配置 DataTable，行结构必须是 FLyraUIConfigRow。 */
     UPROPERTY(Config, EditAnywhere, Category = "UI")
     TSoftObjectPtr<UDataTable> UIConfigTable;
+
+    /** 可覆盖 Image 和 TextBlock 创建规则的工厂类。 */
+    UPROPERTY(Config, EditAnywhere, Category = "UI|Creation")
+    TSubclassOf<ULyraUIFrameworkWidgetFactory> WidgetFactoryClass;
 
     /** World Space 场景 UI 使用的 Layer。 */
     UPROPERTY(Config, EditAnywhere, Category = "Layers", meta = (Categories = "UI.Layer"))
