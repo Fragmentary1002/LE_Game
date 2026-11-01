@@ -166,9 +166,10 @@ void ULyraUIView::NotifyFrameworkOpened()
     }
     bOpened = true;
     TArray<TObjectPtr<ULyraUISubView>> DiscoveredSubViews;
-    WidgetTree->ForEachWidget([this, &DiscoveredSubViews](UWidget* Widget)
+    WidgetTree->ForEachWidgetAndDescendants([this, &DiscoveredSubViews](UWidget* Widget)
     {
-        if (ULyraUISubView* SubView = Cast<ULyraUISubView>(Widget))
+        if (ULyraUISubView* SubView = Cast<ULyraUISubView>(Widget);
+            SubView && SubView->GetTypedOuter<ULyraUIView>() == this)
         {
             DiscoveredSubViews.AddUnique(SubView);
         }
