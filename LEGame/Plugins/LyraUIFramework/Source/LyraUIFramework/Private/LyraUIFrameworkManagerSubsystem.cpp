@@ -51,7 +51,9 @@ ULyraUIViewHandle* ULyraUIFrameworkManagerSubsystem::OpenView(FName UIName, UObj
             if (ULyraUIFrameworkLayerHost* LayerHost = LayerHosts.FindRef(ConfigRow->UILayer))
             {
                 LayerHost->RemoveView(ExistingView);
-                LayerHost->AddView(ExistingView, ExistingHandle->Config.Presentation, ExistingHandle->Config.ZOrder);
+                const ULyraUIFrameworkSettings* Settings = GetDefault<ULyraUIFrameworkSettings>();
+                const FVector2D DesignResolution = Settings ? Settings->DesignResolution : FVector2D(1920.0f, 1080.0f);
+                LayerHost->AddView(ExistingView, ExistingHandle->Config.Presentation, ExistingHandle->Config.ZOrder, ExistingView->GetBlackType(), DesignResolution);
             }
         }
         return ExistingHandle;
@@ -107,9 +109,11 @@ ULyraUIViewHandle* ULyraUIFrameworkManagerSubsystem::OpenView(FName UIName, UObj
                     return;
                 }
 
-                LoadedView->InitializeView(ActiveHandle->GetUIName(), ActiveHandle->OpenContext.Get());
+                const ULyraUIFrameworkSettings* Settings = GetDefault<ULyraUIFrameworkSettings>();
+                const FVector2D DesignResolution = Settings ? Settings->DesignResolution : FVector2D(1920.0f, 1080.0f);
+                LoadedView->InitializeView(ActiveHandle->GetUIName(), ActiveHandle->OpenContext.Get(), ActiveHandle->Config.bUseSafeArea, ActiveHandle->Config.BlackType);
                 ActiveHandle->SetView(LoadedView);
-                LayerHost->AddView(LoadedView, ActiveHandle->Config.Presentation, ActiveHandle->Config.ZOrder);
+                LayerHost->AddView(LoadedView, ActiveHandle->Config.Presentation, ActiveHandle->Config.ZOrder, ActiveHandle->Config.BlackType, DesignResolution);
                 ActiveHandle->SetState(ELyraUIFrameworkViewState::Open);
                 if (ActiveHandle->Config.bRequestFocus)
                 {

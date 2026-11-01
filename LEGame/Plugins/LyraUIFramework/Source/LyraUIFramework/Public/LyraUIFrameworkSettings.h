@@ -46,4 +46,8 @@ public:
     UPROPERTY(Config, EditAnywhere, Category = "Layers", meta = (Categories = "UI.Layer"))
     FGameplayTag ModalLayer;
 
+    /** 黑边适配和 Canvas 视图区域使用的设计分辨率。 */
+    UPROPERTY(Config, EditAnywhere, Category = "Adaptation", meta = (ClampMin = "1.0"))
+    FVector2D DesignResolution = FVector2D(1920.0f, 1080.0f);
+
 };

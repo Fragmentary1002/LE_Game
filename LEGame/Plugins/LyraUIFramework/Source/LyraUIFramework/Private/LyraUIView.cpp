@@ -1,15 +1,21 @@
 #include "LyraUIView.h"
 
+#include "Blueprint/WidgetTree.h"
 #include "LyraUIFrameworkManagerSubsystem.h"
 #include "Engine/LocalPlayer.h"
+#include "Components/SafeZone.h"
+#include "Components/Widget.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LyraUIView)
 
 /** 记录界面标识与打开上下文。 */
-void ULyraUIView::InitializeView(FName InUIName, UObject* InOpenContext)
+void ULyraUIView::InitializeView(FName InUIName, UObject* InOpenContext, bool bInUseSafeArea, ELyraUIFrameworkBlackType InBlackType)
 {
     UIName = InUIName;
     OpenContext = InOpenContext;
+    bUseSafeArea = bInUseSafeArea;
+    BlackType = InBlackType;
+    ApplySafeArea();
 }
 
 /** 更新框架可见状态并触发生命周期回调。 */
@@ -51,7 +57,43 @@ void ULyraUIView::NotifyFrameworkOpened()
     {
         bOpened = true;
         OnOpen();
+        PlayOpenAnimation();
     }
+}
+
+/** 播放打开动画；未配置动画时返回 false。 */
+bool ULyraUIView::PlayOpenAnimation()
+{
+    if (!OpenAnimation)
+    {
+        return false;
+    }
+
+    PlayAnimation(OpenAnimation);
+    return true;
+}
+
+/** 播放关闭动画并登记完成后的关闭回调。 */
+bool ULyraUIView::PlayCloseAnimation()
+{
+    if (!CloseAnimation || bClosingWithAnimation)
+    {
+        return false;
+    }
+
+    bClosingWithAnimation = true;
+    FWidgetAnimationDynamicEvent FinishedEvent;
+    FinishedEvent.BindDynamic(this, &ThisClass::HandleCloseAnimationFinished);
+    BindToAnimationFinished(CloseAnimation, FinishedEvent);
+    PlayAnimation(CloseAnimation);
+    return true;
+}
+
+/** 动画完成后清理状态并请求关闭界面。 */
+void ULyraUIView::HandleCloseAnimationFinished()
+{
+    bClosingWithAnimation = false;
+    RequestClose();
 }
 
 /** Widget 构造时只执行一次初始化事件。 */
@@ -63,6 +105,19 @@ void ULyraUIView::NativeConstruct()
     {
         bInitialized = true;
         OnInit();
+    }
+}
+
+/** 将蓝图内容根节点包装进 SafeZone，适配设备安全区。 */
+void ULyraUIView::ApplySafeArea()
+{
+    if (bUseSafeArea && WidgetTree && WidgetTree->RootWidget && !Cast<USafeZone>(WidgetTree->RootWidget))
+    {
+        UWidget* ContentWidget = WidgetTree->RootWidget;
+        USafeZone* SafeZone = WidgetTree->ConstructWidget<USafeZone>(USafeZone::StaticClass(), TEXT("UIFrameworkSafeZone"));
+        SafeZone->SetSidesToPad(true, true, true, true);
+        SafeZone->SetContent(ContentWidget);
+        WidgetTree->RootWidget = SafeZone;
     }
 }
 

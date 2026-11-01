@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "CommonActivatableWidget.h"
+#include "LyraUIFrameworkTypes.h"
+#include "Animation/WidgetAnimation.h"
 #include "LyraUIView.generated.h"
 
 class UWidget;
@@ -15,7 +17,7 @@ class LYRAUIFRAMEWORK_API ULyraUIView : public UCommonActivatableWidget
 public:
     /** 初始化界面实例的业务标识和打开参数。 */
     UFUNCTION(BlueprintCallable, Category = "Lyra UI")
-    void InitializeView(FName InUIName, UObject* InOpenContext);
+    void InitializeView(FName InUIName, UObject* InOpenContext, bool bInUseSafeArea, ELyraUIFrameworkBlackType InBlackType);
 
     /** 获取该界面的配置标识。 */
     UFUNCTION(BlueprintPure, Category = "Lyra UI")
@@ -39,6 +41,17 @@ public:
 
     /** 由内部 Layer 宿主在首次插入时触发打开生命周期。 */
     void NotifyFrameworkOpened();
+
+    /** 获取当前界面配置的黑边策略。 */
+    ELyraUIFrameworkBlackType GetBlackType() const { return BlackType; }
+
+    /** 播放配置的界面打开动画。 */
+    UFUNCTION(BlueprintCallable, Category = "Lyra UI|Animation")
+    bool PlayOpenAnimation();
+
+    /** 播放关闭动画，并在结束后关闭当前实例。 */
+    UFUNCTION(BlueprintCallable, Category = "Lyra UI|Animation")
+    bool PlayCloseAnimation();
 
 public:
     /** 界面初始化时调用一次。 */
@@ -65,9 +78,16 @@ public:
     UFUNCTION(BlueprintImplementableEvent, Category = "Lyra UI|Lifecycle")
     void OnRelease();
 
+    /** 关闭动画播放完成后请求 Manager 移除界面。 */
+    UFUNCTION()
+    void HandleCloseAnimationFinished();
+
 protected:
     /** Widget 构造时触发初始化生命周期。 */
     virtual void NativeConstruct() override;
+
+    /** 按配置将蓝图根控件置于安全区内。 */
+    void ApplySafeArea();
 
     /** Widget 销毁时触发释放生命周期。 */
     virtual void NativeDestruct() override;
@@ -98,6 +118,23 @@ private:
 
     /** 是否允许框架渲染。 */
     bool bFrameworkVisible = true;
+
+    /** 初始化时是否将蓝图根控件包装进 SafeZone。 */
+    bool bUseSafeArea = true;
+
+    /** 当前界面使用的黑边适配策略。 */
+    ELyraUIFrameworkBlackType BlackType = ELyraUIFrameworkBlackType::None;
+
+    /** Widget Blueprint 可选绑定的打开动画。 */
+    UPROPERTY(Transient, BlueprintReadOnly, Category = "Lyra UI|Animation", meta = (BindWidgetAnim))
+    TObjectPtr<UWidgetAnimation> OpenAnimation;
+
+    /** Widget Blueprint 可选绑定的关闭动画。 */
+    UPROPERTY(Transient, BlueprintReadOnly, Category = "Lyra UI|Animation", meta = (BindWidgetAnim))
+    TObjectPtr<UWidgetAnimation> CloseAnimation;
+
+    /** 防止同一个界面重复登记关闭动画完成回调。 */
+    bool bClosingWithAnimation = false;
 
     friend class ULyraUIFrameworkLayerHost;
 };
