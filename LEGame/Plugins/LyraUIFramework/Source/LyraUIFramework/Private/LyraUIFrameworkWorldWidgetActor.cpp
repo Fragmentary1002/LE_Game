@@ -2,6 +2,7 @@
 
 #include "Components/WidgetComponent.h"
 #include "Engine/LocalPlayer.h"
+#include "GameFramework/PlayerController.h"
 #include "Blueprint/UserWidget.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LyraUIFrameworkWorldWidgetActor)
@@ -23,7 +24,7 @@ void ALyraUIFrameworkWorldWidgetActor::InitializeWorldWidget(TSubclassOf<UUserWi
     {
         return;
     }
-    APlayerController* PlayerController = LocalPlayer->GetPlayerController();
+    APlayerController* PlayerController = LocalPlayer->GetPlayerController(GetWorld());
     if (!IsValid(PlayerController))
     {
         return;

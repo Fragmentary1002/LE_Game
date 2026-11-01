@@ -83,7 +83,8 @@ protected:
 	virtual void OnRootLayoutReleased(UCommonLocalPlayer* LocalPlayer, UPrimaryGameLayout* Layout);
 
 	void CreateLayoutWidget(UCommonLocalPlayer* LocalPlayer);
-	TSubclassOf<UPrimaryGameLayout> GetLayoutWidgetClass(UCommonLocalPlayer* LocalPlayer);
+	/** 允许可复用 UI 插件按玩家选择原生或蓝图根布局。 */
+	virtual TSubclassOf<UPrimaryGameLayout> GetLayoutWidgetClass(UCommonLocalPlayer* LocalPlayer);
 
 private:
 	ELocalMultiplayerInteractionMode LocalMultiplayerInteractionMode = ELocalMultiplayerInteractionMode::PrimaryOnly;

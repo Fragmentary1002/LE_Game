@@ -30,6 +30,11 @@ ULyraUIViewHandle* ULyraUIFrameworkManagerSubsystem::OpenView(FName UIName, UObj
         return nullptr;
     }
     const FLyraUIConfigRow Config = *Row;
+    if (Config.UILayer == GetDefault<ULyraUIFrameworkSettings>()->SceneLayer)
+    {
+        UE_LOG(LogTemp, Error, TEXT("SceneLayer 由 ALyraUIFrameworkWorldWidgetActor 管理，不能通过屏幕 OpenView 打开：%s"), *UIName.ToString());
+        return nullptr;
+    }
     const TArray<TObjectPtr<ULyraUIViewHandle>> Snapshot = ActiveHandles;
     for (ULyraUIViewHandle* Existing : Snapshot)
     {
@@ -96,7 +101,7 @@ ULyraUIViewHandle* ULyraUIFrameworkManagerSubsystem::OpenView(FName UIName, UObj
                 return;
             }
             ULyraUIFrameworkLayerHost* Host = GetOrCreateLayerHost(Active->Config.UILayer);
-            APlayerController* PlayerController = GetLocalPlayer() ? GetLocalPlayer()->GetPlayerController() : nullptr;
+            APlayerController* PlayerController = GetLocalPlayer() ? GetLocalPlayer()->GetPlayerController(GetWorld()) : nullptr;
             ULyraUIView* View = Host && PlayerController ? CreateWidget<ULyraUIView>(PlayerController, ViewClass) : nullptr;
             if (!ActiveHandles.Contains(Active) || Active->GetState() != ELyraUIFrameworkViewState::Loading)
             {

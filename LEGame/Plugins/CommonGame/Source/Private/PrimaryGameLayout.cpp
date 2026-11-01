@@ -86,11 +86,15 @@ void UPrimaryGameLayout::OnIsDormantChanged()
 	//OnLayoutDormancyChanged().Broadcast(bIsDormant);
 }
 
+/** 注册 Layer 标签，同一容器的多个别名只绑定一次过渡监听。 */
 void UPrimaryGameLayout::RegisterLayer(FGameplayTag LayerTag, UCommonActivatableWidgetContainerBase* LayerWidget)
 {
 	if (!IsDesignTime())
 	{
-		LayerWidget->OnTransitioningChanged.AddUObject(this, &UPrimaryGameLayout::OnWidgetStackTransitioning);
+		if (!LayerWidget->OnTransitioningChanged.IsBoundToObject(this))
+		{
+			LayerWidget->OnTransitioningChanged.AddUObject(this, &UPrimaryGameLayout::OnWidgetStackTransitioning);
+		}
 		// TODO: Consider allowing a transition duration, we currently set it to 0, because if it's not 0, the
 		//       transition effect will cause focus to not transition properly to the new widgets when using
 		//       gamepad always.

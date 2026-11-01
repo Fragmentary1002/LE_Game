@@ -15,6 +15,9 @@ class LYRAUIFRAMEWORK_API ULyraUIFrameworkSettings : public UDeveloperSettings
     GENERATED_BODY()
 
 public:
+    /** 提供插件自带的默认 Layer，无需项目重复配置。 */
+    ULyraUIFrameworkSettings(const FObjectInitializer& ObjectInitializer);
+
     /** UI 配置 DataTable，行结构必须是 FLyraUIConfigRow。 */
     UPROPERTY(Config, EditAnywhere, Category = "UI")
     TSoftObjectPtr<UDataTable> UIConfigTable;
