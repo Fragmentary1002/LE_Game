@@ -96,7 +96,7 @@ void ULyraUIView::RequestClose()
 }
 
 /** 在当前本地玩家的 UIExtension 插槽注册一个界面子控件。 */
-bool ULyraUIView::RegisterWidgetExtension(FGameplayTag ExtensionPointTag, TSubclassOf<UUserWidget> WidgetClass, int32 Priority)
+bool ULyraUIView::RegisterWidgetExtension(FGameplayTag ExtensionPointTag, TSubclassOf<UUserWidget> WidgetClass, int32 ExtensionPriority)
 {
     ULocalPlayer* LocalPlayer = GetOwningLocalPlayer();
     UWorld* World = GetWorld();
@@ -105,7 +105,7 @@ bool ULyraUIView::RegisterWidgetExtension(FGameplayTag ExtensionPointTag, TSubcl
     {
         return false;
     }
-    FUIExtensionHandle Handle = ExtensionSubsystem->RegisterExtensionAsWidgetForContext(ExtensionPointTag, LocalPlayer, WidgetClass, Priority);
+    FUIExtensionHandle Handle = ExtensionSubsystem->RegisterExtensionAsWidgetForContext(ExtensionPointTag, LocalPlayer, WidgetClass, ExtensionPriority);
     if (!Handle.IsValid())
     {
         return false;

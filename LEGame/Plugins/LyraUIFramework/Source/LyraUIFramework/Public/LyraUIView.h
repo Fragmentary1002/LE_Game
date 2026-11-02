@@ -51,7 +51,7 @@ public:
 
     /** 在当前本地玩家的 UIExtension 插槽注册一个界面子控件。 */
     UFUNCTION(BlueprintCallable, Category = "Lyra UI|Extension", meta = (Categories = "UI.Extension"))
-    bool RegisterWidgetExtension(FGameplayTag ExtensionPointTag, TSubclassOf<UUserWidget> WidgetClass, int32 Priority = 0);
+    bool RegisterWidgetExtension(FGameplayTag ExtensionPointTag, TSubclassOf<UUserWidget> WidgetClass, int32 ExtensionPriority = 0);
 
     /** 使用项目控件工厂为当前 WidgetTree 创建 Image。 */
     UFUNCTION(BlueprintCallable, Category = "Lyra UI|Creation")
