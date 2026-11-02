@@ -1,0 +1,6 @@
+# 保留随官方源码分发的第三方依赖库，覆盖父仓库的二进制忽略规则。
+!Source/ThirdParty/**/*.dll
+!Source/ThirdParty/**/*.lib
+!Source/ThirdParty/**/*.a
+!Source/ThirdParty/**/*.so
+!Source/ThirdParty/**/*.dylib

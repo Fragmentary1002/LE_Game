@@ -21,6 +21,10 @@
 	],
 	"Plugins": [
 		{
+			"Name": "UnLua",
+			"Enabled": true
+		},
+		{
 			"Name": "LyraUIFramework",
 			"Enabled": true
 		},
