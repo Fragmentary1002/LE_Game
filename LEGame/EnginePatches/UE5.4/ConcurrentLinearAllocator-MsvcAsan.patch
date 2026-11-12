@@ -1,0 +1,33 @@
+diff --git a/Engine/Source/Runtime/Core/Public/Experimental/ConcurrentLinearAllocator.h b/Engine/Source/Runtime/Core/Public/Experimental/ConcurrentLinearAllocator.h
+index 7184fe5a..bdd2c3f7 100644
+--- a/Engine/Source/Runtime/Core/Public/Experimental/ConcurrentLinearAllocator.h
++++ b/Engine/Source/Runtime/Core/Public/Experimental/ConcurrentLinearAllocator.h
+@@ -26,14 +26,27 @@
+ 
+ #if PLATFORM_HAS_ASAN_INCLUDE
+ #include <sanitizer/asan_interface.h>
++//[PMGame++] Frag modify-- 避免 MSVC 调用未定义的特性检测宏，同时保留 ASAN 检测
++//#if defined(__SANITIZE_ADDRESS__)
++//#define IS_ASAN_ENABLED 1
++//#elif __has_feature(address_sanitizer)
++//#define IS_ASAN_ENABLED 1
++//#else
++//#define IS_ASAN_ENABLED 0
++//#endif
+ #if defined(__SANITIZE_ADDRESS__)
+ #define IS_ASAN_ENABLED 1
+-#elif __has_feature(address_sanitizer)
++#elif defined(__has_feature)
++#if __has_feature(address_sanitizer)
+ #define IS_ASAN_ENABLED 1
+ #else
+ #define IS_ASAN_ENABLED 0
+ #endif
+ #else
++#define IS_ASAN_ENABLED 0
++#endif
++//[PMGame--]
++#else
+ #define ASAN_POISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
+ #define ASAN_UNPOISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
+ #define IS_ASAN_ENABLED 0
