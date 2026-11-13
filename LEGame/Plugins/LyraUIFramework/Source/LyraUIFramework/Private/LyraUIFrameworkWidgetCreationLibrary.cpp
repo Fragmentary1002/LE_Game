@@ -16,7 +16,7 @@ UWidget* ULyraUIFrameworkWidgetCreationLibrary::CreateWidget(UWidgetTree* Widget
         return nullptr;
     }
     const TSubclassOf<ULyraUIFrameworkWidgetFactory> FactoryClass = GetDefault<ULyraUIFrameworkSettings>()->WidgetFactoryClass;
-    ULyraUIFrameworkWidgetFactory* Factory = NewObject<ULyraUIFrameworkWidgetFactory>(GetTransientPackage(), FactoryClass ? FactoryClass : ULyraUIFrameworkWidgetFactory::StaticClass());
+    ULyraUIFrameworkWidgetFactory* Factory = NewObject<ULyraUIFrameworkWidgetFactory>(GetTransientPackage(), FactoryClass ? FactoryClass.Get() : ULyraUIFrameworkWidgetFactory::StaticClass());
     return Factory ? Factory->CreateWidget(WidgetTree, WidgetClass, WidgetName) : nullptr;
 }
 
@@ -28,7 +28,7 @@ UImage* ULyraUIFrameworkWidgetCreationLibrary::CreateImage(UWidgetTree* WidgetTr
         return nullptr;
     }
     const TSubclassOf<ULyraUIFrameworkWidgetFactory> FactoryClass = GetDefault<ULyraUIFrameworkSettings>()->WidgetFactoryClass;
-    ULyraUIFrameworkWidgetFactory* Factory = NewObject<ULyraUIFrameworkWidgetFactory>(GetTransientPackage(), FactoryClass ? FactoryClass : ULyraUIFrameworkWidgetFactory::StaticClass());
+    ULyraUIFrameworkWidgetFactory* Factory = NewObject<ULyraUIFrameworkWidgetFactory>(GetTransientPackage(), FactoryClass ? FactoryClass.Get() : ULyraUIFrameworkWidgetFactory::StaticClass());
     return Factory ? Factory->CreateImage(WidgetTree, WidgetName) : nullptr;
 }
 
@@ -40,6 +40,6 @@ UTextBlock* ULyraUIFrameworkWidgetCreationLibrary::CreateTextBlock(UWidgetTree* 
         return nullptr;
     }
     const TSubclassOf<ULyraUIFrameworkWidgetFactory> FactoryClass = GetDefault<ULyraUIFrameworkSettings>()->WidgetFactoryClass;
-    ULyraUIFrameworkWidgetFactory* Factory = NewObject<ULyraUIFrameworkWidgetFactory>(GetTransientPackage(), FactoryClass ? FactoryClass : ULyraUIFrameworkWidgetFactory::StaticClass());
+    ULyraUIFrameworkWidgetFactory* Factory = NewObject<ULyraUIFrameworkWidgetFactory>(GetTransientPackage(), FactoryClass ? FactoryClass.Get() : ULyraUIFrameworkWidgetFactory::StaticClass());
     return Factory ? Factory->CreateTextBlock(WidgetTree, WidgetName) : nullptr;
 }

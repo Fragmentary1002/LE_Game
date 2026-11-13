@@ -124,20 +124,20 @@ void ULyraUIFrameworkLayerHost::RefreshViews()
         if (Entry.Background)
         {
             Entry.Background->SetVisibility(bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-            if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Entry.Background->Slot))
+            if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Entry.Background->Slot))
             {
-                Slot->SetAnchors(FAnchors(0, 0, 1, 1));
-                Slot->SetOffsets(FMargin(0));
-                Slot->SetZOrder(Index * 2);
+                CanvasSlot->SetAnchors(FAnchors(0, 0, 1, 1));
+                CanvasSlot->SetOffsets(FMargin(0));
+                CanvasSlot->SetZOrder(Index * 2);
             }
         }
         if (Entry.View)
         {
-            if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Entry.View->Slot))
+            if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Entry.View->Slot))
             {
-                Slot->SetAnchors(FAnchors(0, 0, 1, 1));
-                Slot->SetOffsets(ULyraUIFrameworkAdapterLibrary::CalculateBlackBarPadding(CachedViewportSize, DesignSize, Entry.Config.BlackType));
-                Slot->SetZOrder(Index * 2 + 1);
+                CanvasSlot->SetAnchors(FAnchors(0, 0, 1, 1));
+                CanvasSlot->SetOffsets(ULyraUIFrameworkAdapterLibrary::CalculateBlackBarPadding(CachedViewportSize, DesignSize, Entry.Config.BlackType));
+                CanvasSlot->SetZOrder(Index * 2 + 1);
             }
         }
     }

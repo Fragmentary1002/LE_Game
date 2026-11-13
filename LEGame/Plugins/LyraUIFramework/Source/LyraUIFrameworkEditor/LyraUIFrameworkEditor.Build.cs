@@ -17,6 +17,7 @@ public class LyraUIFrameworkEditor : ModuleRules
             "ContentBrowser",
             "UnrealEd",
             "UMG",
+            "CommonUI",
             "UMGEditor",
             "Slate",
             "SlateCore",

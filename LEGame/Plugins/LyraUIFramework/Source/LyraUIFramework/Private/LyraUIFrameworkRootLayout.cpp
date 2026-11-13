@@ -57,11 +57,11 @@ void ULyraUIFrameworkRootLayout::NativeOnInitialized()
         {
             continue;
         }
-        UCanvasPanelSlot* Slot = LayerCanvas->AddChildToCanvas(LayerStack);
+        UCanvasPanelSlot* CanvasSlot = LayerCanvas->AddChildToCanvas(LayerStack);
         LayerStack->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-        Slot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
-        Slot->SetOffsets(FMargin(0.0f));
-        Slot->SetZOrder(Index);
+        CanvasSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
+        CanvasSlot->SetOffsets(FMargin(0.0f));
+        CanvasSlot->SetZOrder(Index);
         RegisterLayer(LayerTag, LayerStack);
         RegisteredLayers.Add(LayerTag);
         if (LayerTag == LyraUIFrameworkTags::Modal.GetTag() && Settings->ModalLayer.IsValid() &&

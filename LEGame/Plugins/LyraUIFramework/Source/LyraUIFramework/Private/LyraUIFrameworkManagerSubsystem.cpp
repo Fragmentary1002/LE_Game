@@ -155,7 +155,7 @@ void ULyraUIFrameworkManagerSubsystem::CloseView(ULyraUIViewHandle* Handle, bool
     }
     Handle->SetState(ELyraUIFrameworkViewState::Closing);
     ResumeInputForHandle(Handle);
-    if (Handle->StreamableHandle && Handle->StreamableHandle->IsLoading())
+    if (Handle->StreamableHandle && Handle->StreamableHandle->IsLoadingInProgress())
     {
         Handle->StreamableHandle->CancelHandle();
     }

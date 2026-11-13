@@ -4,6 +4,7 @@
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
+#include "CommonActivatableWidget.h"
 #include "Engine/DataTable.h"
 #include "Engine/UserDefinedEnum.h"
 #include "Factories/EnumFactory.h"
@@ -86,7 +87,7 @@ UWidgetBlueprint* LyraUIFrameworkEditorTools::ResolveOrCreateView(UWidgetBluepri
     }
     View->Modify();
     View->WidgetTree->Modify();
-    View->WidgetTree->RootWidget = View->WidgetTree->ConstructWidget<UUserWidget>(Template->GeneratedClass, TEXT("TemplateContent"));
+    View->WidgetTree->RootWidget = View->WidgetTree->ConstructWidget<UUserWidget>(Template->GeneratedClass.Get(), TEXT("TemplateContent"));
     View->GetOutermost()->GetMetaData()->SetValue(View, SourceTemplateKey, *Template->GetPathName());
     FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(View);
     FKismetEditorUtilities::CompileBlueprint(View, EBlueprintCompileOptions::SkipSave);

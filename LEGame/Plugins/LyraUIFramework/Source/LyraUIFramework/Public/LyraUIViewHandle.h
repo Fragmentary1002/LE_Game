@@ -4,7 +4,7 @@
 #include "LyraUIFrameworkTypes.h"
 #include "LyraUIViewHandle.generated.h"
 
-class FStreamableHandle;
+struct FStreamableHandle;
 class ULyraUIFrameworkManagerSubsystem;
 class ULyraUIView;
 

@@ -24,12 +24,12 @@ void ULyraUIFrameworkLoopListView::SetSourceItems(const TArray<UObject*>& InSour
     }
 
     LoopItems.Reset();
-    TArray<UObject*> ListItems;
+    TArray<UObject*> GeneratedListItems;
     if (!SourceItems.IsEmpty())
     {
         const int32 SafeCycleCount = FMath::Clamp(CycleCount | 1, 3, 15);
         LoopItems.Reserve(SourceItems.Num() * SafeCycleCount);
-        ListItems.Reserve(SourceItems.Num() * SafeCycleCount);
+        GeneratedListItems.Reserve(SourceItems.Num() * SafeCycleCount);
         for (int32 CycleIndex = 0; CycleIndex < SafeCycleCount; ++CycleIndex)
         {
             for (int32 SourceIndex = 0; SourceIndex < SourceItems.Num(); ++SourceIndex)
@@ -37,11 +37,11 @@ void ULyraUIFrameworkLoopListView::SetSourceItems(const TArray<UObject*>& InSour
                 ULyraUIFrameworkLoopItem* LoopItem = NewObject<ULyraUIFrameworkLoopItem>(this);
                 LoopItem->Initialize(SourceItems[SourceIndex], SourceIndices[SourceIndex]);
                 LoopItems.Add(LoopItem);
-                ListItems.Add(LoopItem);
+                GeneratedListItems.Add(LoopItem);
             }
         }
     }
-    SetListItems(ListItems);
+    SetListItems(GeneratedListItems);
 }
 
 /** 将列表中的循环代理映射回原始业务对象。 */

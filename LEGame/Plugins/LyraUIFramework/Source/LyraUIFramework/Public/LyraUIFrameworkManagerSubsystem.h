@@ -9,7 +9,7 @@ class ULyraUIView;
 class ULyraUIViewHandle;
 class ULyraUIFrameworkLayerHost;
 struct FLyraUIConfigRow;
-struct FSubsystemCollectionBase;
+class FSubsystemCollectionBase;
 
 /** 按本地玩家隔离管理 UI 配置、加载、实例和关闭流程。 */
 UCLASS()
