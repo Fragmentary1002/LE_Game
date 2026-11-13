@@ -15,6 +15,7 @@
 #pragma once
 
 #include "CoreUObject.h"
+#include "Templates/ChooseClass.h"
 #include "Misc/EngineVersionComparison.h"
 #include <type_traits>
 
