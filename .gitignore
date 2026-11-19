@@ -74,3 +74,4 @@ LEGame/Plugins/**/Intermediate/*
 # Cache files for the editor to use
 LEGame/DerivedDataCache/*
 LEGame/.idea
+LyraStarterGame/.idea
