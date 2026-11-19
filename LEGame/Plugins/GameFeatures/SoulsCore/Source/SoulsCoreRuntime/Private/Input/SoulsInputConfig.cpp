@@ -51,7 +51,8 @@ USoulsInputConfig::USoulsInputConfig(const FObjectInitializer& ObjectInitializer
     MappingContext->MapKey(Move, EKeys::A).Modifiers.Add(Negative);
     MappingContext->MapKey(Move, EKeys::D);
     MappingContext->MapKey(Move, EKeys::Gamepad_Left2D).Modifiers.Add(DeadZone);
-    MappingContext->MapKey(MouseLook, EKeys::Mouse2D).Modifiers.Add(InvertPitch);
+    // UE 视口已经转换鼠标纵轴，直接传递给 Lyra 的俯仰输入。
+    MappingContext->MapKey(MouseLook, EKeys::Mouse2D);
     MappingContext->MapKey(StickLook, EKeys::Gamepad_Right2D).Modifiers = { DeadZone, InvertPitch };
     MappingContext->MapKey(Lock, EKeys::MiddleMouseButton);
     MappingContext->MapKey(Lock, EKeys::Gamepad_RightThumbstick);

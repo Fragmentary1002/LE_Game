@@ -6,6 +6,21 @@ import runpy
 import unreal
 
 
+# 检查实际保存的鼠标映射，保证额外修饰器不会反转 UE 已处理的鼠标轴。
+def validate_mouse_direction(mapping):
+    mouse = [entry for entry in mapping.get_editor_property("mappings")
+             if entry.get_editor_property("key").export_text() == "Mouse2D"]
+    assert len(mouse) == 1, "IMC_Souls 应当只有一条 Mouse2D 映射"
+    entry = mouse[0]
+    action = entry.get_editor_property("action")
+    assert action.get_editor_property("value_type") == unreal.InputActionValueType.AXIS2D
+    modifiers = list(entry.get_editor_property("modifiers")) + list(action.get_editor_property("modifiers"))
+    for modifier in modifiers:
+        if isinstance(modifier, unreal.InputModifierNegate):
+            assert not modifier.get_editor_property("y"), "鼠标 Y 轴被额外取反，上移会变成向下看"
+            assert not modifier.get_editor_property("x"), "鼠标 X 轴被额外取反，右移会变成向左看"
+
+
 # 读取并验证所有入口配置，不修改或保存设计师资产。
 def main():
     unreal.load_module("SoulsCoreRuntime")
@@ -51,6 +66,7 @@ def main():
     mappings = mapping.get_editor_property("mappings")
     assert len(mappings) == 12
     assert all(entry.get_editor_property("action") in actions for entry in mappings)
+    validate_mouse_direction(mapping)
     feature = load(prefix + "/SoulsCore")
     assert len(feature.get_editor_property("primary_asset_types_to_scan")) == 3
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
