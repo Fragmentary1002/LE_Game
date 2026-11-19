@@ -21,8 +21,18 @@ public class LyraGameTarget : TargetRules
 
 	private static bool bHasWarnedAboutShared = false;
 
+	// 为本项目的所有构建目标统一设置编译选项。
 	internal static void ApplySharedLyraTargetSettings(TargetRules Target)
 	{
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			// 仅本项目使用 VS2022 工具链，覆盖用户级的旧版编译器配置。
+			Target.WindowsPlatform.Compiler = WindowsCompiler.VisualStudio2022;
+			Target.WindowsPlatform.CompilerVersion = "14.44.35207";
+			// 安装版引擎允许本项目覆盖构建环境，避免按全局旧版本验证引擎基准目标。
+			Target.bOverrideBuildEnvironment = true;
+		}
+
 		ILogger Logger = Target.Logger;
 		
 		Target.DefaultBuildSettings = BuildSettingsVersion.V5;
