@@ -10,7 +10,8 @@
   "EnabledByDefault": false,
   "BuiltInInitialFeatureState": "Registered",
   "Modules": [
-    { "Name": "SoulsCoreRuntime", "Type": "Runtime", "LoadingPhase": "Default" }
+    { "Name": "SoulsCoreRuntime", "Type": "Runtime", "LoadingPhase": "Default" },
+    { "Name": "SoulsCoreEditor", "Type": "Editor", "LoadingPhase": "Default" }
   ],
   "Plugins": [
     { "Name": "GameFeatures", "Enabled": true },

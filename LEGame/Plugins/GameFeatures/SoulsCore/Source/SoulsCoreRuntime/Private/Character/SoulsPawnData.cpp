@@ -13,4 +13,5 @@ USoulsPawnData::USoulsPawnData(const FObjectInitializer& ObjectInitializer)
     PawnClass = ASoulsCharacter::StaticClass();
     InputConfig = CreateDefaultSubobject<USoulsInputConfig>(TEXT("SoulsInputConfig"));
     DefaultCameraMode = USoulsCameraMode::StaticClass();
+    LockOnCameraMode = USoulsCameraMode_LockOn::StaticClass();
 }

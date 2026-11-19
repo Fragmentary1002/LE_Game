@@ -56,13 +56,13 @@ private:
     // 解绑当前目标生命事件。
     void UnbindTarget();
 
-    UPROPERTY(Transient)
+    UPROPERTY(Transient, meta = (BindWidgetOptional))
     TObjectPtr<UProgressBar> PlayerHealthBar;
-    UPROPERTY(Transient)
+    UPROPERTY(Transient, meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> PlayerHealthText;
-    UPROPERTY(Transient)
+    UPROPERTY(Transient, meta = (BindWidgetOptional))
     TObjectPtr<UProgressBar> TargetHealthBar;
-    UPROPERTY(Transient)
+    UPROPERTY(Transient, meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TargetText;
     TWeakObjectPtr<ULyraHealthComponent> PlayerHealth;
     TWeakObjectPtr<ULyraHealthComponent> TargetHealth;

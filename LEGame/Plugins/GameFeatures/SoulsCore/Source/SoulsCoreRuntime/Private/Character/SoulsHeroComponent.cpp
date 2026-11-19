@@ -3,6 +3,7 @@
 #include "Camera/SoulsCameraMode.h"
 #include "Character/LyraPawnData.h"
 #include "Character/LyraPawnExtensionComponent.h"
+#include "Character/SoulsPawnData.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
@@ -11,6 +12,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Input/SoulsInputConfig.h"
 #include "InputActionValue.h"
+#include "InputMappingContext.h"
 #include "LyraGameplayTags.h"
 #include "Targeting/SoulsLockOnComponent.h"
 
@@ -167,6 +169,12 @@ TSubclassOf<ULyraCameraMode> USoulsHeroComponent::DetermineCameraMode() const
     const USoulsLockOnComponent* Lock = GetOwner()->FindComponentByClass<USoulsLockOnComponent>();
     if (Lock && Lock->GetTarget())
     {
+        const ULyraPawnExtensionComponent* Extension = ULyraPawnExtensionComponent::FindPawnExtensionComponent(GetOwner());
+        const USoulsPawnData* PawnData = Extension ? Extension->GetPawnData<USoulsPawnData>() : nullptr;
+        if (PawnData && PawnData->LockOnCameraMode)
+        {
+            return PawnData->LockOnCameraMode;
+        }
         return USoulsCameraMode_LockOn::StaticClass();
     }
     return Super::DetermineCameraMode();

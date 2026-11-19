@@ -21,7 +21,7 @@
 USoulsHUDWidget::USoulsHUDWidget(const FObjectInitializer& ObjectInitializer)
     : Super(ObjectInitializer)
 {
-    bIsFocusable = false;
+    SetIsFocusable(false);
     SetVisibility(ESlateVisibility::HitTestInvisible);
     ForceVolatile(true);
 }
@@ -32,7 +32,7 @@ TOptional<FUIInputConfig> USoulsHUDWidget::GetDesiredInputConfig() const
     return FUIInputConfig(ECommonInputMode::Game, EMouseCaptureMode::CapturePermanently_IncludingInitialMouseDown);
 }
 
-// 原生构建血条、目标信息及输入提示，无需额外 Widget 蓝图。
+// 优先使用蓝图设计的控件树，直接使用原生类时创建默认布局。
 TSharedRef<SWidget> USoulsHUDWidget::RebuildWidget()
 {
     if (!WidgetTree->RootWidget)
@@ -43,7 +43,7 @@ TSharedRef<SWidget> USoulsHUDWidget::RebuildWidget()
         UCanvasPanelSlot* TextSlot = Root->AddChildToCanvas(PlayerHealthText);
         TextSlot->SetPosition(FVector2D(48.0f, 32.0f));
         TextSlot->SetSize(FVector2D(340.0f, 32.0f));
-        PlayerHealthBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), TEXT("PlayerHealth"));
+        PlayerHealthBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), TEXT("PlayerHealthBar"));
         PlayerHealthBar->SetFillColorAndOpacity(FLinearColor(0.6f, 0.03f, 0.03f));
         UCanvasPanelSlot* HealthSlot = Root->AddChildToCanvas(PlayerHealthBar);
         HealthSlot->SetPosition(FVector2D(48.0f, 72.0f));
@@ -56,7 +56,7 @@ TSharedRef<SWidget> USoulsHUDWidget::RebuildWidget()
         TargetTextSlot->SetPosition(FVector2D(0.0f, -36.0f));
         TargetTextSlot->SetSize(FVector2D(400.0f, 32.0f));
         TargetText->SetJustification(ETextJustify::Center);
-        TargetHealthBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), TEXT("TargetHealth"));
+        TargetHealthBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), TEXT("TargetHealthBar"));
         TargetHealthBar->SetFillColorAndOpacity(FLinearColor(0.7f, 0.15f, 0.04f));
         UCanvasPanelSlot* TargetSlot = Root->AddChildToCanvas(TargetHealthBar);
         TargetSlot->SetAnchors(FAnchors(0.5f, 0.85f));

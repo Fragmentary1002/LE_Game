@@ -16,6 +16,6 @@ public:
     // 创建默认输入动作和键鼠、手柄映射。
     USoulsInputConfig(const FObjectInitializer& ObjectInitializer);
 
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Souls|Input")
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Souls|Input")
     TObjectPtr<UInputMappingContext> MappingContext;
 };
