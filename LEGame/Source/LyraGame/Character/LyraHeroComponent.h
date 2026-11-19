@@ -80,12 +80,15 @@ protected:
 	void Input_AbilityInputTagReleased(FGameplayTag InputTag);
 
 	void Input_Move(const FInputActionValue& InputActionValue);
-	void Input_LookMouse(const FInputActionValue& InputActionValue);
-	void Input_LookStick(const FInputActionValue& InputActionValue);
+	// 允许玩法模块调整鼠标观察行为。
+	virtual void Input_LookMouse(const FInputActionValue& InputActionValue);
+	// 允许玩法模块调整摇杆观察行为。
+	virtual void Input_LookStick(const FInputActionValue& InputActionValue);
 	void Input_Crouch(const FInputActionValue& InputActionValue);
 	void Input_AutoRun(const FInputActionValue& InputActionValue);
 
-	TSubclassOf<ULyraCameraMode> DetermineCameraMode() const;
+	// 允许玩法模块选择自由或锁定相机并保留能力相机优先级。
+	virtual TSubclassOf<ULyraCameraMode> DetermineCameraMode() const;
 	
 	void OnInputConfigActivated(const FLoadedMappableConfigPair& ConfigPair);
 	void OnInputConfigDeactivated(const FLoadedMappableConfigPair& ConfigPair);

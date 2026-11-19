@@ -16,7 +16,7 @@ class UCurveVector;
  *	A basic third person camera mode.
  */
 UCLASS(Abstract, Blueprintable)
-class ULyraCameraMode_ThirdPerson : public ULyraCameraMode
+class LYRAGAME_API ULyraCameraMode_ThirdPerson : public ULyraCameraMode
 {
 	GENERATED_BODY()
 

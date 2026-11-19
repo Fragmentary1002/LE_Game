@@ -1,0 +1,55 @@
+SoulsCore 首次使用
+=================
+
+本插件包含魂类玩家角色、自由与锁定移动、相机、输入和基础 HUD。
+局内规则全部使用 C++，没有 Lua。
+
+首次生成资产
+------------
+1. 使用 UE5.4 正常构建 LyraEditor，然后重启编辑器。
+2. 保存当前关卡；确认 Python Editor Script Plugin 已启用。
+3. 在编辑器菜单 Tools > Execute Python Script 中执行：
+   Plugins/GameFeatures/SoulsCore/Content/Python/setup_souls_core.py
+4. 脚本创建 /SoulsCore/SoulsCore、Experience、HeroData、输入配置、角色蓝图、
+   基础死亡 AbilitySet、HUD ActionSet 以及 /SoulsCore/Maps/L_Souls_Test。
+5. 重启编辑器，让 GameFeature 注册并扫描首次创建的资产。
+6. 打开 /SoulsCore/Maps/L_Souls_Test，以 Standalone 模式运行。
+
+重复执行脚本不会覆盖已有配置或地图；出现失败时修复原因后可再次执行。
+生成过程不提交文件。生成的 .uasset/.umap 应检查后一起加入版本控制。
+
+默认操作
+--------
+WASD / 左摇杆：移动。
+鼠标 / 右摇杆：自由观察。
+鼠标中键 / 按下右摇杆：锁定或解除锁定。
+Q、E / 滚轮 / 锁定时横向拨动右摇杆：切换目标。
+右摇杆回中后才允许再次切换。
+
+验收
+----
+站立时转动镜头，人物不跟随镜头旋转；移动时面向移动方向。
+锁定后可以绕目标移动和后退，解除后恢复自由朝向。
+持续遮挡约 0.6 秒、目标死亡/销毁或超距后解除锁定。
+HUD 显示真实生命值及锁定标记，无精力假数据。
+在游戏实例的训练假人上调用 ApplyTestDamage(25)，验证目标血条变化；
+生命归零后应自动解除锁定。
+更换玩家 Pawn 后，HUD 解绑旧角色并订阅新角色。
+靠近墙面检查相机防穿墙，重复运行检查输入和 HUD 是否重复创建。
+
+当前范围
+--------
+优先面向单人 Standalone；锁定状态是本地玩家状态，尚未实现联网服务端裁定。
+复用 Lyra 无武器动画层，近战动画与精细的转身/滑步调优留待战斗阶段。
+当前不包含攻击、翻滚、精力、篝火、存档和自动复活。
+
+验证边界
+--------
+UHT -WarningsAsErrors 反射验证与 C++ 编译、链接、PIE 验证不同。
+本次按项目要求不进行 C++ 编译，因此新原生类首次构建后的资产生成与
+运行表现仍须在编辑器验证，不能把 UHT 通过等同于可运行验证通过。
+
+本机额外限制：全局 BuildConfiguration.xml 指定了不存在的 MSVC 14.29，
+UHT 检查通过命令行临时指定已安装工具链运行，没有修改全局设置。
+独立编辑器 API 检查被现有 LECommonWidget 缺少模块二进制阻断；
+首次正常构建需要同时生成该现有 UI 模块和 SoulsCoreRuntime。
