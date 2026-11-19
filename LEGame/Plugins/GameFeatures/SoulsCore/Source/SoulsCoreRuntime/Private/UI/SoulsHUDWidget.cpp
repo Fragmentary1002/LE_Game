@@ -205,7 +205,7 @@ int32 USoulsHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allo
     if (IsActivated() && Target && UWidgetLayoutLibrary::ProjectWorldLocationToWidgetPosition(
         GetOwningPlayer(), Target->GetComponentLocation(), Screen, false))
     {
-        const FGeometry Viewport = UWidgetLayoutLibrary::GetViewportWidgetGeometry(this);
+        const FGeometry Viewport = UWidgetLayoutLibrary::GetViewportWidgetGeometry(GetOwningPlayer());
         const FVector2D Local = AllottedGeometry.AbsoluteToLocal(Viewport.LocalToAbsolute(Screen));
         const TArray<FVector2D> Points = {
             Local + FVector2D(0, -9), Local + FVector2D(9, 0), Local + FVector2D(0, 9),
