@@ -25,7 +25,11 @@
 			"Enabled": true
 		},
 		{
-			"Name": "LyraUIFramework",
+			"Name": "LEUIFrameWork",
+			"Enabled": true
+		},
+		{
+			"Name": "LECommonWidget",
 			"Enabled": true
 		},
 		{

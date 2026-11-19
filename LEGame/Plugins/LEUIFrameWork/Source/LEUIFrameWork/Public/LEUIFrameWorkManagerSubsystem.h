@@ -1,0 +1,72 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
+#include "Subsystems/LocalPlayerSubsystem.h"
+#include "LEUIFrameWorkManagerSubsystem.generated.h"
+
+class ULEUIView;
+class ULEUIViewHandle;
+class ULEUIFrameWorkLayerHost;
+struct FLEUIConfigRow;
+class FSubsystemCollectionBase;
+
+/** 按本地玩家隔离管理 UI 配置、加载、实例和关闭流程。 */
+UCLASS()
+class LEUIFRAMEWORK_API ULEUIFrameWorkManagerSubsystem : public ULocalPlayerSubsystem
+{
+    GENERATED_BODY()
+
+public:
+    /** 根据 UIName 读取配置并异步打开界面，立即返回可监听结果的句柄。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI")
+    ULEUIViewHandle* OpenView(FName UIName, UObject* OpenContext = nullptr);
+
+    /** 关闭指定打开句柄对应的界面。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI")
+    void CloseView(ULEUIViewHandle* Handle, bool bImmediate = false);
+
+    /** 根据界面实例查找并关闭对应句柄。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI")
+    void CloseViewByWidget(ULEUIView* View);
+
+    /** 根据 Layer 遮挡同步句柄的打开和暂停状态。 */
+    void NotifyViewVisibilityChanged(ULEUIView* View, bool bVisible);
+
+    /** 关闭当前玩家的所有非常驻界面。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI")
+    void CloseAll(bool bCloseResidentViews = false);
+
+    /** 查找 UI 配置；未配置或配置表不可用时返回空。 */
+    const FLEUIConfigRow* FindConfig(FName UIName) const;
+
+    /** 子系统销毁时取消未完成的界面加载。 */
+    virtual void Deinitialize() override;
+
+private:
+    /** 将失败状态写入句柄并通知调用方。 */
+    void FailOpen(ULEUIViewHandle* Handle);
+
+    /** 完成关闭流程并释放空闲 Layer 宿主。 */
+    void FinalizeCloseView(ULEUIViewHandle* Handle);
+
+    /** 恢复异步加载前挂起的玩家输入。 */
+    void ResumeInputForHandle(ULEUIViewHandle* Handle);
+
+    /** 获取或在 Lyra RootLayout 中创建指定 Layer 的持久宿主。 */
+    ULEUIFrameWorkLayerHost* GetOrCreateLayerHost(FGameplayTag LayerTag);
+
+    /** 从 RootLayout 移除不再承载界面的空宿主。 */
+    void RemoveEmptyLayerHost(FGameplayTag LayerTag, ULEUIFrameWorkLayerHost* Host);
+
+    /** 正在加载或已打开的界面句柄。 */
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<ULEUIViewHandle>> ActiveHandles;
+
+    /** 每个 Lyra Layer 对应的内部 View 宿主。 */
+    UPROPERTY(Transient)
+    TMap<FGameplayTag, TObjectPtr<ULEUIFrameWorkLayerHost>> LayerHosts;
+
+    /** 子系统退出期间拒绝业务回调重新打开界面。 */
+    bool bShuttingDown = false;
+};

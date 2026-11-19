@@ -1,0 +1,300 @@
+#include "LEUIFrameWorkManagerSubsystem.h"
+
+#include "CommonLocalPlayer.h"
+#include "CommonUIExtensions.h"
+#include "Engine/AssetManager.h"
+#include "Engine/DataTable.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/StreamableManager.h"
+#include "GameFramework/PlayerController.h"
+#include "LEUIFrameWorkLayerHost.h"
+#include "LEUIFrameWorkSettings.h"
+#include "LEUIFrameWorkTypes.h"
+#include "LEUIView.h"
+#include "LEUIViewHandle.h"
+#include "PrimaryGameLayout.h"
+
+#include UE_INLINE_GENERATED_CPP_BY_NAME(LEUIFrameWorkManagerSubsystem)
+
+/** 根据配置快照执行重复策略并开始异步加载。 */
+ULEUIViewHandle* ULEUIFrameWorkManagerSubsystem::OpenView(FName UIName, UObject* OpenContext)
+{
+    if (bShuttingDown || !Cast<UCommonLocalPlayer>(GetLocalPlayer()))
+    {
+        return nullptr;
+    }
+    const FLEUIConfigRow* Row = FindConfig(UIName);
+    if (!Row || Row->WBPPath.IsNull() || !Row->UILayer.IsValid())
+    {
+        UE_LOG(LogTemp, Error, TEXT("UI 配置无效：%s"), *UIName.ToString());
+        return nullptr;
+    }
+    const FLEUIConfigRow Config = *Row;
+    if (Config.UILayer == GetDefault<ULEUIFrameWorkSettings>()->SceneLayer)
+    {
+        UE_LOG(LogTemp, Error, TEXT("SceneLayer 由 ALECommonWorldWidgetActor 管理，不能通过屏幕 OpenView 打开：%s"), *UIName.ToString());
+        return nullptr;
+    }
+    const TArray<TObjectPtr<ULEUIViewHandle>> Snapshot = ActiveHandles;
+    for (ULEUIViewHandle* Existing : Snapshot)
+    {
+        if (!Existing || Existing->GetUIName() != UIName || Existing->GetState() == ELEUIFrameWorkViewState::Closing)
+        {
+            continue;
+        }
+        if (Config.DuplicatePolicy == ELEUIFrameWorkDuplicatePolicy::Reuse ||
+            Config.DuplicatePolicy == ELEUIFrameWorkDuplicatePolicy::BringToFront)
+        {
+            if (Config.DuplicatePolicy == ELEUIFrameWorkDuplicatePolicy::BringToFront)
+            {
+                if (ULEUIFrameWorkLayerHost* Host = LayerHosts.FindRef(Existing->Config.UILayer))
+                {
+                    Host->BringViewToFront(Existing->GetView());
+                }
+            }
+            return Existing;
+        }
+        if (Config.DuplicatePolicy == ELEUIFrameWorkDuplicatePolicy::Restart)
+        {
+            CloseView(Existing, true);
+        }
+    }
+    if (Config.DuplicatePolicy == ELEUIFrameWorkDuplicatePolicy::Restart)
+    {
+        for (ULEUIViewHandle* Existing : ActiveHandles)
+        {
+            if (Existing && Existing->GetUIName() == UIName && Existing->GetState() != ELEUIFrameWorkViewState::Closing)
+            {
+                return Existing;
+            }
+        }
+    }
+    UPrimaryGameLayout* Root = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer());
+    if (!Root || !Root->GetLayerWidget(Config.UILayer))
+    {
+        UE_LOG(LogTemp, Error, TEXT("RootLayout 未注册 UI Layer：%s"), *Config.UILayer.ToString());
+        return nullptr;
+    }
+    ULEUIViewHandle* Handle = NewObject<ULEUIViewHandle>(this);
+    Handle->Initialize(this, UIName, Config, OpenContext);
+    Handle->SetState(ELEUIFrameWorkViewState::Loading);
+    ActiveHandles.Add(Handle);
+    if (Config.bSuspendInputUntilLoaded)
+    {
+        Handle->InputSuspendToken = UCommonUIExtensions::SuspendInputForPlayer(GetLocalPlayer(), TEXT("LEUIFrameWorkLoading"));
+    }
+    const TWeakObjectPtr<ULEUIViewHandle> WeakHandle(Handle);
+    TSharedPtr<FStreamableHandle> Streaming = UAssetManager::Get().GetStreamableManager().RequestAsyncLoad(
+        Config.WBPPath.ToSoftObjectPath(),
+        FStreamableDelegate::CreateWeakLambda(this, [this, WeakHandle]()
+        {
+            ULEUIViewHandle* Active = WeakHandle.Get();
+            if (!Active || Active->GetState() != ELEUIFrameWorkViewState::Loading || !ActiveHandles.Contains(Active))
+            {
+                return;
+            }
+            ResumeInputForHandle(Active);
+            UClass* ViewClass = Active->Config.WBPPath.Get();
+            if (!ViewClass || !ViewClass->IsChildOf<ULEUIView>() || ViewClass->HasAnyClassFlags(CLASS_Abstract))
+            {
+                FailOpen(Active);
+                return;
+            }
+            ULEUIFrameWorkLayerHost* Host = GetOrCreateLayerHost(Active->Config.UILayer);
+            APlayerController* PlayerController = GetLocalPlayer() ? GetLocalPlayer()->GetPlayerController(GetWorld()) : nullptr;
+            ULEUIView* View = Host && PlayerController ? CreateWidget<ULEUIView>(PlayerController, ViewClass) : nullptr;
+            if (!ActiveHandles.Contains(Active) || Active->GetState() != ELEUIFrameWorkViewState::Loading)
+            {
+                RemoveEmptyLayerHost(Active->Config.UILayer, Host);
+                return;
+            }
+            if (!View)
+            {
+                FailOpen(Active);
+                return;
+            }
+            Active->SetView(View);
+            View->InitializeView(Active->GetUIName(), Active->OpenContext, Active->Config, Active);
+            if (!ActiveHandles.Contains(Active) || Active->GetState() != ELEUIFrameWorkViewState::Loading)
+            {
+                return;
+            }
+            Active->SetState(ELEUIFrameWorkViewState::Open);
+            Host->AddView(View, Active->Config);
+            if (!ActiveHandles.Contains(Active) ||
+                (Active->GetState() != ELEUIFrameWorkViewState::Open && Active->GetState() != ELEUIFrameWorkViewState::Suspended))
+            {
+                return;
+            }
+            View->NotifyFrameworkOpened();
+            if (ActiveHandles.Contains(Active) &&
+                (Active->GetState() == ELEUIFrameWorkViewState::Open || Active->GetState() == ELEUIFrameWorkViewState::Suspended))
+            {
+                Active->OnOpened.Broadcast(View);
+            }
+        }));
+    Handle->SetStreamableHandle(Streaming);
+    if (!Streaming)
+    {
+        FailOpen(Handle);
+    }
+    return Handle;
+}
+
+/** 关闭先标记状态再执行业务回调，关闭动画结束后才最终移除。 */
+void ULEUIFrameWorkManagerSubsystem::CloseView(ULEUIViewHandle* Handle, bool bImmediate)
+{
+    if (!Handle || !ActiveHandles.Contains(Handle))
+    {
+        return;
+    }
+    if (Handle->GetState() == ELEUIFrameWorkViewState::Closing)
+    {
+        if (bImmediate) { FinalizeCloseView(Handle); }
+        return;
+    }
+    Handle->SetState(ELEUIFrameWorkViewState::Closing);
+    ResumeInputForHandle(Handle);
+    if (Handle->StreamableHandle && Handle->StreamableHandle->IsLoadingInProgress())
+    {
+        Handle->StreamableHandle->CancelHandle();
+    }
+    if (ULEUIView* View = Handle->GetView())
+    {
+        View->NotifyFrameworkClosing();
+        if (!ActiveHandles.Contains(Handle)) { return; }
+        if (!bImmediate && !bShuttingDown && View->PlayCloseAnimation()) { return; }
+    }
+    FinalizeCloseView(Handle);
+}
+
+/** 在回调前清除管理器所有权，允许业务安全地关闭或再次打开。 */
+void ULEUIFrameWorkManagerSubsystem::FinalizeCloseView(ULEUIViewHandle* Handle)
+{
+    if (!Handle || !ActiveHandles.Contains(Handle)) { return; }
+    ULEUIView* View = Handle->GetView();
+    ActiveHandles.RemoveSingle(Handle);
+    Handle->SetState(ELEUIFrameWorkViewState::Closed);
+    if (View)
+    {
+        View->ReleaseFrameworkView();
+        if (ULEUIFrameWorkLayerHost* Host = LayerHosts.FindRef(Handle->Config.UILayer))
+        {
+            Host->RemoveView(View);
+            RemoveEmptyLayerHost(Handle->Config.UILayer, Host);
+        }
+    }
+    Handle->SetView(nullptr);
+    Handle->OpenContext = nullptr;
+    Handle->StreamableHandle.Reset();
+    Handle->OnClosed.Broadcast(View);
+}
+
+/** 通过实例定位对应打开请求。 */
+void ULEUIFrameWorkManagerSubsystem::CloseViewByWidget(ULEUIView* View)
+{
+    const TArray<TObjectPtr<ULEUIViewHandle>> Snapshot = ActiveHandles;
+    for (ULEUIViewHandle* Handle : Snapshot)
+    {
+        if (Handle && Handle->GetView() == View)
+        {
+            CloseView(Handle);
+            return;
+        }
+    }
+}
+
+/** 根据 Layer 遮挡同步句柄的打开和暂停状态。 */
+void ULEUIFrameWorkManagerSubsystem::NotifyViewVisibilityChanged(ULEUIView* View, bool bVisible)
+{
+    for (ULEUIViewHandle* Handle : ActiveHandles)
+    {
+        if (Handle && Handle->GetView() == View && Handle->GetState() != ELEUIFrameWorkViewState::Closing)
+        {
+            Handle->SetState(bVisible ? ELEUIFrameWorkViewState::Open : ELEUIFrameWorkViewState::Suspended);
+            return;
+        }
+    }
+}
+
+/** 使用快照关闭当前实例，默认保留配置为常驻的界面。 */
+void ULEUIFrameWorkManagerSubsystem::CloseAll(bool bCloseResidentViews)
+{
+    const TArray<TObjectPtr<ULEUIViewHandle>> Snapshot = ActiveHandles;
+    for (ULEUIViewHandle* Handle : Snapshot)
+    {
+        if (Handle && (bCloseResidentViews || !Handle->Config.bResident))
+        {
+            CloseView(Handle, bShuttingDown);
+        }
+    }
+}
+
+/** 配置表以行名作为主键，拒绝不兼容的行结构。 */
+const FLEUIConfigRow* ULEUIFrameWorkManagerSubsystem::FindConfig(FName UIName) const
+{
+    UDataTable* Table = GetDefault<ULEUIFrameWorkSettings>()->UIConfigTable.LoadSynchronous();
+    if (!Table || Table->GetRowStruct() != FLEUIConfigRow::StaticStruct())
+    {
+        return nullptr;
+    }
+    return Table->FindRow<FLEUIConfigRow>(UIName, TEXT("LEUIFrameWork::FindConfig"), false);
+}
+
+/** 销毁时禁止回调新开界面，并立即取消加载和动画。 */
+void ULEUIFrameWorkManagerSubsystem::Deinitialize()
+{
+    bShuttingDown = true;
+    CloseAll(true);
+    LayerHosts.Empty();
+    Super::Deinitialize();
+}
+
+/** 将失败状态写入句柄后再广播，避免失败回调影响在途请求。 */
+void ULEUIFrameWorkManagerSubsystem::FailOpen(ULEUIViewHandle* Handle)
+{
+    if (!Handle || !ActiveHandles.Contains(Handle)) { return; }
+    ResumeInputForHandle(Handle);
+    ActiveHandles.RemoveSingle(Handle);
+    Handle->SetState(ELEUIFrameWorkViewState::Failed);
+    Handle->OpenContext = nullptr;
+    RemoveEmptyLayerHost(Handle->Config.UILayer, LayerHosts.FindRef(Handle->Config.UILayer));
+    Handle->OnFailed.Broadcast(nullptr);
+}
+
+/** 成对恢复加载期间挂起的玩家输入。 */
+void ULEUIFrameWorkManagerSubsystem::ResumeInputForHandle(ULEUIViewHandle* Handle)
+{
+    if (Handle && !Handle->InputSuspendToken.IsNone())
+    {
+        const FName Token = Handle->InputSuspendToken;
+        Handle->InputSuspendToken = NAME_None;
+        UCommonUIExtensions::ResumeInputForPlayer(GetLocalPlayer(), Token);
+    }
+}
+
+/** 在已经注册的 Lyra Layer 上创建一个内部 Canvas 宿主。 */
+ULEUIFrameWorkLayerHost* ULEUIFrameWorkManagerSubsystem::GetOrCreateLayerHost(FGameplayTag LayerTag)
+{
+    if (ULEUIFrameWorkLayerHost* Host = LayerHosts.FindRef(LayerTag)) { return Host; }
+    UPrimaryGameLayout* Root = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer());
+    ULEUIFrameWorkLayerHost* Host = Root
+        ? Root->PushWidgetToLayerStack<ULEUIFrameWorkLayerHost>(LayerTag, ULEUIFrameWorkLayerHost::StaticClass())
+        : nullptr;
+    if (Host) { LayerHosts.Add(LayerTag, Host); }
+    return Host;
+}
+
+/** 从 RootLayout 移除不再承载界面的空宿主。 */
+void ULEUIFrameWorkManagerSubsystem::RemoveEmptyLayerHost(FGameplayTag LayerTag, ULEUIFrameWorkLayerHost* Host)
+{
+    if (!Host || Host->HasViews()) { return; }
+    if (LayerHosts.FindRef(LayerTag) == Host)
+    {
+        LayerHosts.Remove(LayerTag);
+    }
+    if (UPrimaryGameLayout* Root = UPrimaryGameLayout::GetPrimaryGameLayout(GetLocalPlayer()))
+    {
+        Root->FindAndRemoveWidgetFromLayer(Host);
+    }
+}

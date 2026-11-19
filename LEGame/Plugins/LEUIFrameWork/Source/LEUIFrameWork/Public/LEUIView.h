@@ -1,0 +1,182 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "CommonActivatableWidget.h"
+#include "UIExtensionSystem.h"
+#include "LEUIFrameWorkTypes.h"
+#include "LEUIView.generated.h"
+
+class UWidgetAnimation;
+class ULECommonWidgetControlBinding;
+class ULEUISubView;
+class ULEUIViewController;
+class ULEUIViewHandle;
+class ALECommonModelPreviewActor;
+class AActor;
+class UImage;
+class UTextBlock;
+
+/** 实际业务界面；业务生命周期独立于 Slate 的重建和销毁。 */
+UCLASS(Abstract, BlueprintType, Blueprintable)
+class LEUIFRAMEWORK_API ULEUIView : public UCommonActivatableWidget
+{
+    GENERATED_BODY()
+
+public:
+    /** 默认关闭自动激活，交由框架在完成初始化后管理。 */
+    ULEUIView(const FObjectInitializer& ObjectInitializer);
+
+    /** 在挂接控件树之前注入名称、参数和配置。 */
+    void InitializeView(FName InUIName, UObject* InOpenContext, const FLEUIConfigRow& Config, ULEUIViewHandle* InHandle);
+
+    /** 获取配置中的稳定界面标识。 */
+    UFUNCTION(BlueprintPure, Category = "LE UI")
+    FName GetUIName() const { return UIName; }
+
+    /** 获取当前打开参数，框架持有参数至界面释放。 */
+    UFUNCTION(BlueprintPure, Category = "LE UI")
+    UObject* GetOpenContext() const { return OpenContext; }
+
+    /** 控制遮挡可见性和输入激活，不释放业务资源。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI")
+    void SetFrameworkVisible(bool bVisible);
+
+    /** 查询界面是否未被同层全屏界面覆盖。 */
+    UFUNCTION(BlueprintPure, Category = "LE UI")
+    bool IsFrameworkVisible() const { return bFrameworkVisible; }
+
+    /** 请求通过 Manager 播放关闭动画并移除实例。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI")
+    void RequestClose();
+
+    /** 在当前本地玩家的 UIExtension 插槽注册一个界面子控件。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI|Extension", meta = (Categories = "UI.Extension"))
+    bool RegisterWidgetExtension(FGameplayTag ExtensionPointTag, TSubclassOf<UUserWidget> WidgetClass, int32 ExtensionPriority = 0);
+
+    /** 使用项目控件工厂为当前 WidgetTree 创建 Image。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI|Creation")
+    UImage* CreateFrameworkImage(FName WidgetName);
+
+    /** 使用项目控件工厂为当前 WidgetTree 创建任意 UWidget 子类。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI|Creation")
+    UWidget* CreateFrameworkWidget(TSubclassOf<UWidget> WidgetClass, FName WidgetName);
+
+    /** 使用项目控件工厂为当前 WidgetTree 创建 TextBlock。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI|Creation")
+    UTextBlock* CreateFrameworkTextBlock(FName WidgetName);
+
+    /** 创建模型预览 Actor 并将 RenderTarget 绑定到指定 Image。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI|Model Preview")
+    ALECommonModelPreviewActor* CreateModelPreview(AActor* ModelActor, UImage* TargetImage, int32 Width = 512, int32 Height = 512);
+
+    /** 完成一次业务初始化和打开。 */
+    void NotifyFrameworkOpened();
+
+    /** 停止监听并通知业务开始关闭，只调用一次。 */
+    void NotifyFrameworkClosing();
+
+    /** 释放控件绑定、子界面和业务资源，只调用一次。 */
+    void ReleaseFrameworkView();
+
+    /** 播放可选打开动画。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI|Animation")
+    bool PlayOpenAnimation();
+
+    /** 播放可选关闭动画，结束后交给 Manager 最终移除。 */
+    UFUNCTION(BlueprintCallable, Category = "LE UI|Animation")
+    bool PlayCloseAnimation();
+
+    /** 返回由 View 持有的绑定助手。 */
+    UFUNCTION(BlueprintPure, Category = "LE UI|Binding")
+    ULECommonWidgetControlBinding* GetControlBinding() const { return ControlBinding; }
+
+    /** 执行一次初始化业务。 */
+    UFUNCTION(BlueprintImplementableEvent, Category = "LE UI|Lifecycle")
+    void OnInit();
+
+    /** 打开时刷新业务数据。 */
+    UFUNCTION(BlueprintImplementableEvent, Category = "LE UI|Lifecycle")
+    void OnOpen();
+
+    /** 被全屏界面覆盖时暂停业务。 */
+    UFUNCTION(BlueprintImplementableEvent, Category = "LE UI|Lifecycle")
+    void OnPause();
+
+    /** 从覆盖恢复时继续业务。 */
+    UFUNCTION(BlueprintImplementableEvent, Category = "LE UI|Lifecycle")
+    void OnResume();
+
+    /** 打开时绑定业务监听。 */
+    UFUNCTION(BlueprintImplementableEvent, Category = "LE UI|Lifecycle")
+    void OnAddListener();
+
+    /** 关闭前解除业务监听。 */
+    UFUNCTION(BlueprintImplementableEvent, Category = "LE UI|Lifecycle")
+    void OnRemoveListener();
+
+    /** 开始关闭时回调。 */
+    UFUNCTION(BlueprintImplementableEvent, Category = "LE UI|Lifecycle")
+    void OnClose();
+
+    /** 实例逻辑释放时回调。 */
+    UFUNCTION(BlueprintImplementableEvent, Category = "LE UI|Lifecycle")
+    void OnRelease();
+
+protected:
+    /** 默认返回动作关闭句柄，允许蓝图消费自定义返回行为。 */
+    virtual bool NativeOnHandleBackAction() override;
+
+    /** 清理外部停用产生的输入状态，再同步框架关闭。 */
+    virtual void NativeOnDeactivated() override;
+
+    /** Slate 重建不重复发送业务释放。 */
+    virtual void NativeDestruct() override;
+
+private:
+    /** 动画结束后最终关闭，不再次播放动画。 */
+    UFUNCTION()
+    void HandleCloseAnimationFinished();
+
+    /** 将蓝图内容根节点包装进设备安全区。 */
+    void ApplySafeArea();
+
+    UPROPERTY(Transient, BlueprintReadOnly, Category = "LE UI", meta = (AllowPrivateAccess = "true"))
+    FName UIName;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UObject> OpenContext;
+
+    UPROPERTY(Transient)
+    TObjectPtr<ULECommonWidgetControlBinding> ControlBinding;
+
+    UPROPERTY(Transient)
+    TObjectPtr<ULEUIViewController> Controller;
+
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<ULEUISubView>> SubViews;
+
+    /** 当前 View 注册的扩展句柄，释放界面时逐一注销。 */
+    UPROPERTY(Transient)
+    TArray<FUIExtensionHandle> UIExtensionHandles;
+
+    /** 由当前 View 创建并负责销毁的模型预览 Actor。 */
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<ALECommonModelPreviewActor>> ModelPreviewActors;
+
+    UPROPERTY(Transient)
+    TWeakObjectPtr<ULEUIViewHandle> ViewHandle;
+
+    UPROPERTY(Transient, BlueprintReadOnly, Category = "LE UI|Animation", meta = (BindWidgetAnimOptional, AllowPrivateAccess = "true"))
+    TObjectPtr<UWidgetAnimation> OpenAnimation;
+
+    UPROPERTY(Transient, BlueprintReadOnly, Category = "LE UI|Animation", meta = (BindWidgetAnimOptional, AllowPrivateAccess = "true"))
+    TObjectPtr<UWidgetAnimation> CloseAnimation;
+
+    bool bOpened = false;
+    bool bClosing = false;
+    bool bReleased = false;
+    bool bFrameworkVisible = true;
+    bool bUpdatingActivation = false;
+    bool bClosingWithAnimation = false;
+    bool bRequestFocus = true;
+};
