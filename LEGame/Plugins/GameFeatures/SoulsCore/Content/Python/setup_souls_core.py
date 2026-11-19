@@ -78,14 +78,6 @@ def save(asset, blueprint=False):
         raise RuntimeError("无法保存：{}".format(asset.get_path_name()))
 
 
-# 从已有标签构造可用于输入和 UI 层的 GameplayTag。
-def tag(name):
-    value = unreal.GameplayTag()
-    if not value.import_text('(TagName="{}")'.format(name)):
-        raise RuntimeError("无法创建 GameplayTag：{}".format(name))
-    return value
-
-
 # 构造 GameFeatureData 的主资产扫描规则。
 def scan_rule(name, base_class, directory, blueprints=False):
     rule = unreal.PrimaryAssetTypeInfo()

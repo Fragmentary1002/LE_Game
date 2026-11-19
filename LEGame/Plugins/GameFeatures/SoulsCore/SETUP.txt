@@ -1,22 +1,54 @@
-SoulsCore 首次使用
+SoulsCore 使用说明
 =================
 
-本插件包含魂类玩家角色、自由与锁定移动、相机、输入和基础 HUD。
-局内规则全部使用 C++，没有 Lua。
+已生成并提交玩法资产，可以直接打开地图，无需先运行生成脚本。
+局内规则使用 C++；蓝图与数据资产承担玩法组合、表现和参数配置。
 
-首次生成资产
+进入玩法
+--------
+1. 使用 UE5.4 构建 LyraEditor，然后打开 Lyra.uproject。
+2. 在内容浏览器中启用 Show Plugin Content，找到 Souls Core Content。
+3. 打开 /SoulsCore/Maps/EmptySoulsMap，点击 Play。
+4. 地图已配置 Lyra GameMode、B_SoulsExperience 和单人 PIE。
+   不需要修改项目的全局默认地图或其他 Experience。
+
+资产配置链路
 ------------
-1. 使用 UE5.4 正常构建 LyraEditor，然后重启编辑器。
-2. 保存当前关卡；确认 Python Editor Script Plugin 已启用。
-3. 在编辑器菜单 Tools > Execute Python Script 中执行：
-   Plugins/GameFeatures/SoulsCore/Content/Python/setup_souls_core.py
-4. 脚本创建 /SoulsCore/SoulsCore、Experience、HeroData、输入配置、角色蓝图、
-   基础死亡 AbilitySet、HUD ActionSet 以及 /SoulsCore/Maps/L_Souls_Test。
-5. 重启编辑器，让 GameFeature 注册并扫描首次创建的资产。
-6. 打开 /SoulsCore/Maps/L_Souls_Test，以 Standalone 模式运行。
+EmptySoulsMap -> B_SoulsExperience -> HeroData_Souls -> B_Hero_Souls。
+B_SoulsExperience 激活 SoulsCore，并加载 LAS_Souls_HUD。
+LAS_Souls_HUD 通过 Lyra AddWidgets Action 将 W_SoulsHUD 加入 UI.Layer.Game。
+HeroData_Souls 引用 InputConfig_Souls、AbilitySet_Souls、
+CM_Souls_Free 和 CM_Souls_LockOn。
 
-重复执行脚本不会覆盖已有配置或地图；出现失败时修复原因后可再次执行。
-生成过程不提交文件。生成的 .uasset/.umap 应检查后一起加入版本控制。
+可编辑资产
+----------
+/SoulsCore/SoulsCore
+  GameFeatureData；扫描 Experience、ActionSet、Map，配置 AlwaysCook。
+/SoulsCore/Experiences/B_SoulsExperience
+  选择默认角色数据及 HUD ActionSet，声明需要启用 SoulsCore。
+/SoulsCore/Experiences/LAS_Souls_HUD
+  配置 HUD 蓝图及 UI 层。
+/SoulsCore/Characters/B_Hero_Souls
+  Manny 网格、Lyra 基础动画及无武器动画层；自由/锁定移动组件。
+/SoulsCore/Characters/HeroData_Souls
+  配置角色、能力集、输入和两种相机。
+/SoulsCore/Characters/AbilitySet_Souls
+  复用 GA_Hero_Death 的基础死亡能力。
+/SoulsCore/Camera/CM_Souls_Free
+/SoulsCore/Camera/CM_Souls_LockOn
+  调整视野、镜头距离曲线、过渡速度和锁定跟踪速度。
+/SoulsCore/Input/InputConfig_Souls
+/SoulsCore/Input/IMC_Souls
+/SoulsCore/Input/Actions/IA_*_Souls
+  五个动作和十二条键鼠/手柄映射，可独立调整。
+/SoulsCore/UI/W_SoulsHUD
+  可在 UMG 设计器调整布局。保留 PlayerHealthText、PlayerHealthBar、
+  TargetText、TargetHealthBar 的名称和类型，以便原生代码绑定。
+/SoulsCore/Development/B_SoulsTrainingTarget
+  可锁定训练目标；生命值经过 GAS 和 LyraHealthComponent。
+/SoulsCore/Maps/EmptySoulsMap
+  从 StarterContent/Maps/Minimal_Default 复制，清理演示桌椅，
+  配置测试地面、出生点、两个训练目标和相机碰撞墙。
 
 默认操作
 --------
@@ -26,30 +58,26 @@ WASD / 左摇杆：移动。
 Q、E / 滚轮 / 锁定时横向拨动右摇杆：切换目标。
 右摇杆回中后才允许再次切换。
 
-验收
+验证
 ----
-站立时转动镜头，人物不跟随镜头旋转；移动时面向移动方向。
-锁定后可以绕目标移动和后退，解除后恢复自由朝向。
-持续遮挡约 0.6 秒、目标死亡/销毁或超距后解除锁定。
-HUD 显示真实生命值及锁定标记，无精力假数据。
-在游戏实例的训练假人上调用 ApplyTestDamage(25)，验证目标血条变化；
-生命归零后应自动解除锁定。
-更换玩家 Pawn 后，HUD 解绑旧角色并订阅新角色。
-靠近墙面检查相机防穿墙，重复运行检查输入和 HUD 是否重复创建。
+已通过 LyraEditor Win64 Development 的 UHT、C++ 编译和 DLL 链接。
+Content/Python/validate_souls_core.py 在新编辑器进程中检查资产引用，
+编译六个蓝图并验证输入映射和地图配置。报告输出到
+Saved/SoulsCore/ContentValidation.json。
+Session Frontend > Automation 中可运行 SoulsCore.Experience.EmptySoulsMap。
+该测试实际启动 PIE，验证角色生成、相机配置、输入映射、HUD 控件绑定、
+锁定、目标切换、伤害血条更新以及目标死亡后解除锁定。
+自动测试使用 NullRHI；画面表现、动画自然度和手柄手感仍需人工试玩。
+
+生成工具
+--------
+Content/Python/setup_souls_core.py 可从编辑器 Tools > Execute Python Script 执行。
+SoulsCoreEditor 模块处理 Python 未导出的 WidgetTree、HUD Action 和地图属性。
+工具通过完成标记跳过已初始化资产和地图，保留之后的设计调整。
+生成失败时没有完成标记的资产会在下次执行时继续配置。
 
 当前范围
 --------
-优先面向单人 Standalone；锁定状态是本地玩家状态，尚未实现联网服务端裁定。
-复用 Lyra 无武器动画层，近战动画与精细的转身/滑步调优留待战斗阶段。
-当前不包含攻击、翻滚、精力、篝火、存档和自动复活。
-
-验证边界
---------
-UHT -WarningsAsErrors 反射验证与 C++ 编译、链接、PIE 验证不同。
-本次按项目要求不进行 C++ 编译，因此新原生类首次构建后的资产生成与
-运行表现仍须在编辑器验证，不能把 UHT 通过等同于可运行验证通过。
-
-本机额外限制：全局 BuildConfiguration.xml 指定了不存在的 MSVC 14.29，
-UHT 检查通过命令行临时指定已安装工具链运行，没有修改全局设置。
-独立编辑器 API 检查被现有 LECommonWidget 缺少模块二进制阻断；
-首次正常构建需要同时生成该现有 UI 模块和 SoulsCoreRuntime。
+面向单人玩法。包含角色初始化、自由/锁定移动、相机、基础生命 HUD 和训练目标。
+锁定状态尚未实现联网服务端裁定。
+尚不包含攻击、翻滚、精力、篝火、存档和自动复活。
