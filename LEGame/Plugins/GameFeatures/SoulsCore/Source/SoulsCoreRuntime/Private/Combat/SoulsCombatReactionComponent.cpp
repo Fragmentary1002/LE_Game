@@ -4,6 +4,7 @@
 #include "AbilitySystem/LyraAbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
 #include "Character/LyraPawnExtensionComponent.h"
+#include "Combat/SoulsCombatActionComponent.h"
 #include "GameplayEffect.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SoulsCombatReactionComponent)
@@ -79,12 +80,19 @@ void USoulsCombatReactionComponent::HandleAbilitySystemInitialized()
     }
 }
 
-// 致死伤害交给 Lyra 的死亡事件，存活伤害保留原始命中上下文。
+// 掉血时清除翻滚及缓存，存活伤害携带原始命中上下文触发受击。
 void USoulsCombatReactionComponent::HandleHealthChanged(AActor* Instigator, AActor* Causer,
     const FGameplayEffectSpec* Spec, float Magnitude, float OldHealth, float NewHealth)
 {
-    if (!GetOwner()->HasAuthority() || !BoundASC.IsValid() || !Spec ||
-        NewHealth >= OldHealth || NewHealth <= 0.0f)
+    if (!GetOwner()->HasAuthority() || !BoundASC.IsValid() || NewHealth >= OldHealth)
+    {
+        return;
+    }
+    if (USoulsCombatActionComponent* Combat = GetOwner()->FindComponentByClass<USoulsCombatActionComponent>())
+    {
+        Combat->Interrupt();
+    }
+    if (!Spec || NewHealth <= 0.0f)
     {
         return;
     }

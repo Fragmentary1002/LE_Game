@@ -5,6 +5,7 @@
 #include "AbilitySystemGlobals.h"
 #include "Character/LyraHealthComponent.h"
 #include "Combat/SoulsAttackDefinition.h"
+#include "Combat/SoulsCombatActionComponent.h"
 #include "Combat/SoulsMeleeTraceComponent.h"
 #include "Combat/SoulsMeleeWeapon.h"
 #include "GameplayEffect.h"
@@ -16,7 +17,8 @@ USoulsGameplayAbility_LightAttack::USoulsGameplayAbility_LightAttack(const FObje
     : Super(ObjectInitializer)
 {
     InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
-    NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerOnly;
+    NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerInitiated;
+    NetSecurityPolicy = EGameplayAbilityNetSecurityPolicy::ServerOnly;
     ActivationPolicy = ELyraAbilityActivationPolicy::OnInputTriggered;
     ActivationGroup = ELyraAbilityActivationGroup::Independent;
     AbilityTags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("Ability.Souls.LightAttack")));
@@ -24,6 +26,10 @@ USoulsGameplayAbility_LightAttack::USoulsGameplayAbility_LightAttack(const FObje
     ActivationBlockedTags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("State.Souls.Attacking")));
     ActivationBlockedTags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("State.Souls.HitReact")));
     ActivationBlockedTags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("Status.Death")));
+    FAbilityTriggerData LightAttackTrigger;
+    LightAttackTrigger.TriggerTag = FGameplayTag::RequestGameplayTag(TEXT("Event.Souls.LightAttack"));
+    LightAttackTrigger.TriggerSource = EGameplayAbilityTriggerSource::GameplayEvent;
+    AbilityTriggers.Add(LightAttackTrigger);
 }
 
 // 资产不完整或角色已经死亡时拒绝激活，不留半初始化的攻击状态。
@@ -41,10 +47,15 @@ bool USoulsGameplayAbility_LightAttack::CanActivateAbility(const FGameplayAbilit
     {
         return false;
     }
+    const USoulsCombatActionComponent* Combat = Avatar->FindComponentByClass<USoulsCombatActionComponent>();
+    if (Combat && !Combat->CanStartLightAttack())
+    {
+        return false;
+    }
     return Super::CanActivateAbility(Handle, ActorInfo, SourceTags, TargetTags, OptionalRelevantTags);
 }
 
-// 先绑定命中再播放动作，覆盖 Montage 起始就带有效窗口的情况。
+// 服务器扣费并开启检测，拥有者客户端只播放确认后的动作。
 void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySpecHandle Handle,
     const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
     const FGameplayEventData* TriggerEventData)
@@ -52,16 +63,39 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
     Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
     AActor* Avatar = ActorInfo ? ActorInfo->AvatarActor.Get() : nullptr;
     USoulsMeleeTraceComponent* Trace = Avatar ? Avatar->FindComponentByClass<USoulsMeleeTraceComponent>() : nullptr;
-    if (!Trace || !CommitAbility(Handle, ActorInfo, ActivationInfo) || !Trace->BeginAttack())
+    const USoulsAttackDefinition* Definition = Trace ? Trace->GetAttackDefinition() : nullptr;
+    const bool bPlayerInput = TriggerEventData &&
+        TriggerEventData->EventTag == FGameplayTag::RequestGameplayTag(TEXT("Event.Souls.LightAttack"));
+    const int32 Stage = bPlayerInput && TriggerEventData->EventMagnitude == 2.0f ? 2 : 1;
+    if (!Trace || !Definition || !Definition->AttackMontage || !ActorInfo->GetAnimInstance())
     {
         EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
         return;
     }
-    ActiveTrace = Trace;
-    HitDelegateHandle = Trace->OnHit.AddUObject(this, &ThisClass::HandleConfirmedHit);
-    const USoulsAttackDefinition* Definition = Trace->GetAttackDefinition();
+
+    if (Avatar->HasAuthority())
+    {
+        USoulsCombatActionComponent* Combat = Avatar->FindComponentByClass<USoulsCombatActionComponent>();
+        if (!Definition->DamageEffectClass || (bPlayerInput && !Combat) ||
+            !CommitAbility(Handle, ActorInfo, ActivationInfo) || !Trace->BeginAttack())
+        {
+            EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+            return;
+        }
+        ActiveTrace = Trace;
+        if (Combat && !Combat->StartLightAttack(Stage))
+        {
+            EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+            return;
+        }
+        ActiveCombat = Combat;
+        HitDelegateHandle = Trace->OnHit.AddUObject(this, &ThisClass::HandleConfirmedHit);
+    }
+
+    constexpr float SecondStageRateScale = 1.2f;
+    const float PlayRate = FMath::Max(Definition->PlayRate, 0.1f) * (Stage == 2 ? SecondStageRateScale : 1.0f);
     MontageTask = UAbilityTask_PlayMontageAndWait::CreatePlayMontageAndWaitProxy(this, NAME_None,
-        Definition->AttackMontage, FMath::Max(Definition->PlayRate, 0.1f), NAME_None, true);
+        Definition->AttackMontage, PlayRate, NAME_None, true, 1.0f, 0.0f, true);
     if (!MontageTask)
     {
         EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
@@ -91,8 +125,14 @@ void USoulsGameplayAbility_LightAttack::EndAbility(const FGameplayAbilitySpecHan
     }
     HitDelegateHandle.Reset();
     ActiveTrace.Reset();
-    Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
+    const TWeakObjectPtr<USoulsCombatActionComponent> Combat = ActiveCombat;
+    ActiveCombat.Reset();
     MontageTask = nullptr;
+    Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
+    if (USoulsCombatActionComponent* CombatActions = Combat.Get())
+    {
+        CombatActions->FinishLightAttack(bWasCancelled);
+    }
 }
 
 // 每个目标使用独立 Context，伤害值由已有 LyraCombatSet 与 Execution 计算。
@@ -124,7 +164,7 @@ void USoulsGameplayAbility_LightAttack::HandleMontageCompleted()
 {
     if (IsActive())
     {
-        EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false);
+        EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, HasAuthority(&CurrentActivationInfo), false);
     }
 }
 
@@ -133,6 +173,6 @@ void USoulsGameplayAbility_LightAttack::HandleMontageInterrupted()
 {
     if (IsActive())
     {
-        EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
+        EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, HasAuthority(&CurrentActivationInfo), true);
     }
 }

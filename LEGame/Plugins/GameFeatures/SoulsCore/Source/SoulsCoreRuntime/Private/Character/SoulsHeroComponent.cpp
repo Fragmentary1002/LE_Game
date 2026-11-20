@@ -1,17 +1,22 @@
 #include "Character/SoulsHeroComponent.h"
 
+#include "AbilitySystem/LyraAbilitySystemComponent.h"
 #include "Camera/SoulsCameraMode.h"
 #include "Character/LyraPawnData.h"
 #include "Character/LyraPawnExtensionComponent.h"
 #include "Character/SoulsPawnData.h"
+#include "Combat/SoulsCombatActionComponent.h"
 #include "Combat/SoulsMeleeTraceComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "EnhancedPlayerInput.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Input/SoulsInputConfig.h"
+#include "InputAction.h"
+#include "InputCoreTypes.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "LyraGameplayTags.h"
@@ -49,6 +54,11 @@ void USoulsHeroComponent::RemoveSoulsInput()
     {
         BoundSubsystem->RemoveMappingContext(BoundMapping.Get());
     }
+    if (BoundSubsystem.IsValid() && RollMapping)
+    {
+        BoundSubsystem->RemoveMappingContext(RollMapping);
+    }
+    BoundMoveAction.Reset();
     InputHandles.Reset();
     BoundInput.Reset();
     BoundSubsystem.Reset();
@@ -75,6 +85,21 @@ void USoulsHeroComponent::InitializePlayerInput(UInputComponent* PlayerInputComp
     BoundInput = Input;
     BoundSubsystem = Subsystem;
     BoundMapping = Config->MappingContext;
+    BoundMoveAction = Config->FindNativeInputActionForTag(LyraGameplayTags::InputTag_Move, false);
+    if (const UInputAction* LightAttack = Config->FindAbilityInputActionForTag(FGameplayTag::RequestGameplayTag(TEXT("InputTag.Souls.LightAttack")), false))
+    {
+        InputHandles.Add(Input->BindAction(LightAttack, ETriggerEvent::Started, this, &ThisClass::Input_LightAttack).GetHandle());
+    }
+    if (!RollMapping)
+    {
+        RollAction = NewObject<UInputAction>(this);
+        RollAction->ValueType = EInputActionValueType::Boolean;
+        RollMapping = NewObject<UInputMappingContext>(this);
+        RollMapping->MapKey(RollAction, EKeys::LeftAlt);
+        RollMapping->MapKey(RollAction, EKeys::Gamepad_FaceButton_Right);
+    }
+    Subsystem->AddMappingContext(RollMapping, 1);
+    InputHandles.Add(Input->BindAction(RollAction, ETriggerEvent::Started, this, &ThisClass::Input_Roll).GetHandle());
     const UInputAction* LockAction = Config->FindNativeInputActionForTag(FGameplayTag::RequestGameplayTag(TEXT("InputTag.Souls.LockOn")));
     const UInputAction* SwitchAction = Config->FindNativeInputActionForTag(FGameplayTag::RequestGameplayTag(TEXT("InputTag.Souls.SwitchTarget")));
     if (LockAction)
@@ -90,6 +115,60 @@ void USoulsHeroComponent::InitializePlayerInput(UInputComponent* PlayerInputComp
         InputHandles.Add(Input->BindAction(Stick, ETriggerEvent::Completed, this, &ThisClass::Input_ResetStick).GetHandle());
         InputHandles.Add(Input->BindAction(Stick, ETriggerEvent::Canceled, this, &ThisClass::Input_ResetStick).GetHandle());
     }
+}
+
+// 轻击的 Started 绑定独占按键提交，避免 Triggered 再直接激活一次能力。
+void USoulsHeroComponent::Input_AbilityInputTagPressed(FGameplayTag InputTag)
+{
+    if (InputTag != FGameplayTag::RequestGameplayTag(TEXT("InputTag.Souls.LightAttack")))
+    {
+        Super::Input_AbilityInputTagPressed(InputTag);
+    }
+}
+
+// 翻滚及轻击中保留动作位移，忽略普通移动输入。
+void USoulsHeroComponent::Input_Move(const FInputActionValue& InputActionValue)
+{
+    const USoulsCombatActionComponent* Combat = GetOwner()->FindComponentByClass<USoulsCombatActionComponent>();
+    const ULyraPawnExtensionComponent* Extension = ULyraPawnExtensionComponent::FindPawnExtensionComponent(GetOwner());
+    const ULyraAbilitySystemComponent* ASC = Extension ? Extension->GetLyraAbilitySystemComponent() : nullptr;
+    if ((!Combat || !Combat->IsRolling()) &&
+        (!ASC || !ASC->HasMatchingGameplayTag(FGameplayTag::RequestGameplayTag(TEXT("State.Souls.Attacking")))))
+    {
+        Super::Input_Move(InputActionValue);
+    }
+}
+
+// 将已有轻击输入的按下边沿交给战斗组件。
+void USoulsHeroComponent::Input_LightAttack(const FInputActionValue& Value)
+{
+    if (USoulsCombatActionComponent* Combat = GetOwner()->FindComponentByClass<USoulsCombatActionComponent>())
+    {
+        Combat->SubmitInput(ESoulsCombatInput::LightAttack);
+    }
+}
+
+// 捕获当前移动轴在相机平面内的方向，零向量交由服务端选择角色前向。
+void USoulsHeroComponent::Input_Roll(const FInputActionValue& Value)
+{
+    USoulsCombatActionComponent* Combat = GetOwner()->FindComponentByClass<USoulsCombatActionComponent>();
+    const APlayerController* PC = GetController<APlayerController>();
+    if (!Combat || !PC)
+    {
+        return;
+    }
+    FVector Direction = FVector::ZeroVector;
+    const UEnhancedPlayerInput* EnhancedPlayerInput = Cast<UEnhancedPlayerInput>(PC->PlayerInput);
+    if (EnhancedPlayerInput && BoundMoveAction.IsValid())
+    {
+        if (const FInputActionInstance* Move = EnhancedPlayerInput->FindActionInstanceData(BoundMoveAction.Get()))
+        {
+            const FVector2D Axes = Move->GetValue().Get<FVector2D>();
+            const FRotator CameraYaw(0.0f, PC->GetControlRotation().Yaw, 0.0f);
+            Direction = CameraYaw.RotateVector(FVector(Axes.Y, Axes.X, 0.0f));
+        }
+    }
+    Combat->SubmitInput(ESoulsCombatInput::Roll, Direction);
 }
 
 // 锁定状态下忽略鼠标镜头旋转，避免与自动跟随争用控制旋转。
@@ -151,7 +230,8 @@ void USoulsHeroComponent::Input_SwitchTarget(const FInputActionValue& Value)
 void USoulsHeroComponent::HandleTargetChanged(AActor* TargetActor)
 {
     const USoulsMeleeTraceComponent* Trace = GetOwner()->FindComponentByClass<USoulsMeleeTraceComponent>();
-    if (Trace && Trace->IsAttackActive())
+    const USoulsCombatActionComponent* Combat = GetOwner()->FindComponentByClass<USoulsCombatActionComponent>();
+    if ((Trace && Trace->IsAttackActive()) || (Combat && Combat->IsRolling()))
     {
         bStickSwitchArmed = true;
         return;

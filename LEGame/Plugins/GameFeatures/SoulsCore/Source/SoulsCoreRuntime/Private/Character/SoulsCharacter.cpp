@@ -1,6 +1,7 @@
 #include "Character/SoulsCharacter.h"
 
 #include "Character/SoulsHeroComponent.h"
+#include "Combat/SoulsCombatActionComponent.h"
 #include "Combat/SoulsCombatReactionComponent.h"
 #include "Combat/SoulsMeleeTraceComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -19,6 +20,7 @@ ASoulsCharacter::ASoulsCharacter(const FObjectInitializer& ObjectInitializer)
     LockOn = CreateDefaultSubobject<USoulsLockOnComponent>(TEXT("SoulsLockOn"));
     MeleeTrace = CreateDefaultSubobject<USoulsMeleeTraceComponent>(TEXT("MeleeTrace"));
     CombatReaction = CreateDefaultSubobject<USoulsCombatReactionComponent>(TEXT("CombatReaction"));
+    CreateDefaultSubobject<USoulsCombatActionComponent>(TEXT("CombatActions"));
     GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel6, ECR_Overlap);
     GetMesh()->SetCollisionResponseToChannel(ECC_GameTraceChannel6, ECR_Ignore);
     GetMesh()->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;

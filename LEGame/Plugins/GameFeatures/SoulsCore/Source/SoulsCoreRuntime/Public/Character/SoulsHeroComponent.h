@@ -7,6 +7,7 @@
 class UEnhancedInputComponent;
 class UEnhancedInputLocalPlayerSubsystem;
 class UInputMappingContext;
+class UInputAction;
 
 /** 沿用 Lyra 初始化流程，为魂类角色补充锁定输入与相机选择。 */
 UCLASS()
@@ -25,6 +26,10 @@ protected:
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
     // 保留 Lyra 基础绑定并添加魂类锁定输入。
     virtual void InitializePlayerInput(UInputComponent* PlayerInputComponent) override;
+    // 轻击由独立的按下边沿绑定驱动，其余能力输入沿用 Lyra。
+    virtual void Input_AbilityInputTagPressed(FGameplayTag InputTag) override;
+    // 翻滚或轻击期间不接受普通移动输入。
+    virtual void Input_Move(const FInputActionValue& InputActionValue) override;
     // 自由模式转动镜头，锁定模式由相机决定朝向。
     virtual void Input_LookMouse(const FInputActionValue& InputActionValue) override;
     // 锁定时将右摇杆横向拨动转换为单次目标切换。
@@ -33,6 +38,10 @@ protected:
     virtual TSubclassOf<ULyraCameraMode> DetermineCameraMode() const override;
 
 private:
+    // 将一次轻击按下提交给战斗组件。
+    void Input_LightAttack(const FInputActionValue& Value);
+    // 捕获相机平面移动方向并提交翻滚意图。
+    void Input_Roll(const FInputActionValue& Value);
     // 切换锁定开关。
     void Input_ToggleLock(const FInputActionValue& Value);
     // 按输入方向切换目标。
@@ -44,6 +53,12 @@ private:
     void HandleTargetChanged(AActor* TargetActor);
     // 删除本组件添加的绑定和映射。
     void RemoveSoulsInput();
+
+    TWeakObjectPtr<const UInputAction> BoundMoveAction;
+    UPROPERTY(Transient)
+    TObjectPtr<UInputAction> RollAction;
+    UPROPERTY(Transient)
+    TObjectPtr<UInputMappingContext> RollMapping;
 
     TWeakObjectPtr<UEnhancedInputComponent> BoundInput;
     TWeakObjectPtr<UEnhancedInputLocalPlayerSubsystem> BoundSubsystem;

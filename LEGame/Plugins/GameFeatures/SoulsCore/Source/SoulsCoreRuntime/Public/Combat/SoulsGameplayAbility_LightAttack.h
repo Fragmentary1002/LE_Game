@@ -5,6 +5,7 @@
 #include "SoulsGameplayAbility_LightAttack.generated.h"
 
 class UAbilityTask_PlayMontageAndWait;
+class USoulsCombatActionComponent;
 class USoulsMeleeTraceComponent;
 
 /** 单次轻攻击能力，拥有动作、有效窗口、命中伤害和取消清理的完整生命周期。 */
@@ -46,6 +47,7 @@ private:
     UPROPERTY(Transient)
     TObjectPtr<UAbilityTask_PlayMontageAndWait> MontageTask;
 
+    TWeakObjectPtr<USoulsCombatActionComponent> ActiveCombat;
     TWeakObjectPtr<USoulsMeleeTraceComponent> ActiveTrace;
     FDelegateHandle HitDelegateHandle;
 };

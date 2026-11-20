@@ -76,10 +76,12 @@ protected:
 
 	virtual void InitializePlayerInput(UInputComponent* PlayerInputComponent);
 
-	void Input_AbilityInputTagPressed(FGameplayTag InputTag);
+	// 允许玩法角色接管指定能力输入。
+	virtual void Input_AbilityInputTagPressed(FGameplayTag InputTag);
 	void Input_AbilityInputTagReleased(FGameplayTag InputTag);
 
-	void Input_Move(const FInputActionValue& InputActionValue);
+	// 允许玩法角色在动作期间限制普通移动输入。
+	virtual void Input_Move(const FInputActionValue& InputActionValue);
 	// 允许玩法模块调整鼠标观察行为。
 	virtual void Input_LookMouse(const FInputActionValue& InputActionValue);
 	// 允许玩法模块调整摇杆观察行为。
