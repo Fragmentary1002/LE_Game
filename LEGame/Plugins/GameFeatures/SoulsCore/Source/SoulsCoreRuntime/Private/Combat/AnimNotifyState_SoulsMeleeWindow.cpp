@@ -14,7 +14,7 @@ void UAnimNotifyState_SoulsMeleeWindow::NotifyBegin(USkeletalMeshComponent* Mesh
     {
         if (USoulsMeleeTraceComponent* Trace = Owner->FindComponentByClass<USoulsMeleeTraceComponent>())
         {
-            Trace->SetHitWindowEnabled(true);
+            Trace->SetMontageHitWindow(Animation, true, TotalDuration);
         }
     }
 }
@@ -28,7 +28,7 @@ void UAnimNotifyState_SoulsMeleeWindow::NotifyEnd(USkeletalMeshComponent* MeshCo
     {
         if (USoulsMeleeTraceComponent* Trace = Owner->FindComponentByClass<USoulsMeleeTraceComponent>())
         {
-            Trace->SetHitWindowEnabled(false);
+            Trace->SetMontageHitWindow(Animation, false);
         }
     }
 }

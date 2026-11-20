@@ -1,6 +1,7 @@
 #include "Combat/SoulsGameplayAbility_LightAttack.h"
 
 #include "Abilities/Tasks/AbilityTask_PlayMontageAndWait.h"
+#include "AI/SoulsEnemy.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
 #include "Character/LyraHealthComponent.h"
@@ -30,6 +31,13 @@ USoulsGameplayAbility_LightAttack::USoulsGameplayAbility_LightAttack(const FObje
     LightAttackTrigger.TriggerTag = FGameplayTag::RequestGameplayTag(TEXT("Event.Souls.LightAttack"));
     LightAttackTrigger.TriggerSource = EGameplayAbilityTriggerSource::GameplayEvent;
     AbilityTriggers.Add(LightAttackTrigger);
+    if (HasAnyFlags(RF_ClassDefaultObject))
+    {
+        FAbilityTriggerData Trigger;
+        Trigger.TriggerTag = FGameplayTag::RequestGameplayTag(TEXT("Event.Souls.EnemyAttack"));
+        Trigger.TriggerSource = EGameplayAbilityTriggerSource::GameplayEvent;
+        AbilityTriggers.Add(Trigger);
+    }
 }
 
 // 资产不完整或角色已经死亡时拒绝激活，不留半初始化的攻击状态。
@@ -67,6 +75,19 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
     const bool bPlayerInput = TriggerEventData &&
         TriggerEventData->EventTag == FGameplayTag::RequestGameplayTag(TEXT("Event.Souls.LightAttack"));
     const int32 Stage = bPlayerInput && TriggerEventData->EventMagnitude == 2.0f ? 2 : 1;
+    float LungeDistance = 0.0f;
+    if (TriggerEventData && !bPlayerInput)
+    {
+        if (!Cast<ASoulsEnemy>(Avatar) || TriggerEventData->Instigator.Get() != Avatar ||
+            TriggerEventData->Target.Get() != Avatar ||
+            TriggerEventData->EventTag != FGameplayTag::RequestGameplayTag(TEXT("Event.Souls.EnemyAttack")))
+        {
+            EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+            return;
+        }
+        Definition = Cast<USoulsAttackDefinition>(TriggerEventData->OptionalObject.Get());
+        LungeDistance = TriggerEventData->EventMagnitude;
+    }
     if (!Trace || !Definition || !Definition->AttackMontage || !ActorInfo->GetAnimInstance())
     {
         EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
@@ -77,7 +98,7 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
     {
         USoulsCombatActionComponent* Combat = Avatar->FindComponentByClass<USoulsCombatActionComponent>();
         if (!Definition->DamageEffectClass || (bPlayerInput && !Combat) ||
-            !CommitAbility(Handle, ActorInfo, ActivationInfo) || !Trace->BeginAttack())
+            !CommitAbility(Handle, ActorInfo, ActivationInfo) || !Trace->BeginAttack(Definition, LungeDistance))
         {
             EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
             return;

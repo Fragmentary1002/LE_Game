@@ -5,6 +5,7 @@
 #include "SoulsMeleeTraceComponent.generated.h"
 
 class ASoulsMeleeWeapon;
+class UAnimSequenceBase;
 class USoulsAttackDefinition;
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FSoulsMeleeHit, const FHitResult&);
@@ -20,11 +21,14 @@ public:
     USoulsMeleeTraceComponent(const FObjectInitializer& ObjectInitializer);
 
     // 开始一次攻击，重置命中集合并接管普通移动和朝向。
-    bool BeginAttack();
+    bool BeginAttack(const USoulsAttackDefinition* Definition = nullptr, float LungeDistance = 0.0f);
 
     // 动画通知开启或关闭有效期，关闭不会清除本次命中集合。
     UFUNCTION(BlueprintCallable, Category = "Souls|Combat")
     void SetHitWindowEnabled(bool bEnabled);
+
+    // 仅接收当前攻击 Montage 的窗口，突刺在开窗时开始位移。
+    void SetMontageHitWindow(const UAnimSequenceBase* Animation, bool bEnabled, float NotifyDuration = 0.0f);
 
     // 停止采样并按当前锁定状态恢复移动，可重复调用。
     UFUNCTION(BlueprintCallable, Category = "Souls|Combat")
@@ -89,6 +93,12 @@ private:
     UPROPERTY(Transient)
     TObjectPtr<ASoulsMeleeWeapon> Weapon;
 
+    // 移除本次突刺拥有的根运动源，保留其他移动效果。
+    void StopLunge();
+
+    TWeakObjectPtr<const USoulsAttackDefinition> ActiveAttackDefinition;
+    float ActiveLungeDistance = 0.0f;
+    uint16 LungeSourceId = 0;
     TSet<TWeakObjectPtr<AActor>> HitActors;
     FTransform PreviousWeaponTransform;
     FVector LocalBladeRoot = FVector::ZeroVector;

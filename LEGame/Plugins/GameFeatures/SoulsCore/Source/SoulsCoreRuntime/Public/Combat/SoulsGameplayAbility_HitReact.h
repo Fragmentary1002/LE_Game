@@ -28,6 +28,11 @@ public:
     TObjectPtr<UAnimMontage> RightMontage;
 
 protected:
+    // 在 GAS 取消攻击之前过滤处于出招霸体的 Boss。
+    virtual bool CanActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+        const FGameplayTagContainer* SourceTags, const FGameplayTagContainer* TargetTags,
+        FGameplayTagContainer* OptionalRelevantTags) const override;
+
     // 从命中来源选择动作并开始本次受击。
     virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
         const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;

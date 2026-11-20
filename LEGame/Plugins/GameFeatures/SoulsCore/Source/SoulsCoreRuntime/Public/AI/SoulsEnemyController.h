@@ -5,6 +5,8 @@
 
 class ASoulsEnemy;
 class UAIPawnData;
+class USoulsAttackDefinition;
+struct FSoulsBossAttackOption;
 
 enum class ESoulsEnemyAttackResult : uint8 { Unavailable, Turning, Started };
 
@@ -42,6 +44,15 @@ public:
     // 再次确认目标并转向，到位后调用已有的轻攻击能力。
     ESoulsEnemyAttackResult TryMeleeAttack(float DeltaSeconds);
 
+    // 判断 Boss 是否在出招期间免疫普通硬直。
+    bool HasBossAttackArmor() const;
+
+    // 按当前阶段确定目标位置是否已进入任意招式的起手距离。
+    bool IsWithinAttackRange(double DistanceSquared) const;
+
+    // 返回可用招式的最远距离，供追击任务设置接受半径。
+    float GetAttackApproachRange() const;
+
     // 在攻击结束后开始冷却，启动失败时只短暂延迟重试。
     void ScheduleAttackRetry(bool bAttackStarted);
 
@@ -62,7 +73,28 @@ private:
     // 清理本次交战的目标及搜索位置。
     void ClearTarget();
 
+    // 加载并校验匹配当前出生资产的 Boss 招式。
+    bool InitializeBossProfile(const UAIPawnData& Data);
+
+    // 选出距离和阶段允许且尽量与上一招不同的招式。
+    const FSoulsBossAttackOption* SelectBossAttack(double DistanceSquared) const;
+
+    // 仅在上一招收尾完成且目标可见时推进半血阶段。
+    void TryEnterBossPhaseTwo(ASoulsEnemy& Enemy, double Now);
+
+    // 向敌人 ASC 提交一次带动作定义的攻击并确认实际开招。
+    bool TryActivateBossAttack(ASoulsEnemy& Enemy, const FSoulsBossAttackOption& Option);
+
     TWeakObjectPtr<APawn> Target;
+
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<USoulsAttackDefinition>> LoadedBossDefinitions;
+
+    FName LastBossAttackId;
+    float ActiveBossPause = 0.0f;
+    bool bUsesBossProfile = false;
+    bool bBossPhaseTwo = false;
+    bool bAwaitingBossAttackTaskFinish = false;
     FVector HomeLocation = FVector::ZeroVector;
     FRotator HomeRotation = FRotator::ZeroRotator;
     double LastSeenTime = -1.0;

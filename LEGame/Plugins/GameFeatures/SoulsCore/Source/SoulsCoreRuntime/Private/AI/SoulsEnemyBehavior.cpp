@@ -214,7 +214,7 @@ EBTNodeResult::Type UBTTask_SoulsEnemyMove::UpdateMove(UBehaviorTreeComponent& O
     const bool bChasing = MoveIntent == ESoulsEnemyIntent::Chase;
     const double Now = Enemy->GetWorld()->GetTimeSeconds();
     const FVector PawnLocation = Enemy->GetNavAgentLocation();
-    const float StopRange = bChasing ? Data->AttackRange * 0.75f : ArrivalTolerance * 0.5f;
+    const float StopRange = bChasing ? Controller->GetAttackApproachRange() * 0.75f : ArrivalTolerance * 0.5f;
     FAIMoveRequest Request;
     if (bChasing)
     {
@@ -223,7 +223,7 @@ EBTNodeResult::Type UBTTask_SoulsEnemyMove::UpdateMove(UBehaviorTreeComponent& O
         {
             return EBTNodeResult::InProgress;
         }
-        if (FVector::DistSquared(PawnLocation, Target->GetNavAgentLocation()) <= FMath::Square(Data->AttackRange))
+        if (Controller->IsWithinAttackRange(FVector::DistSquared(PawnLocation, Target->GetNavAgentLocation())))
         {
             return EBTNodeResult::InProgress;
         }

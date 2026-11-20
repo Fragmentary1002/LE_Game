@@ -1,6 +1,8 @@
 #include "AI/SoulsEnemy.h"
 
 #include "AI/AIPawnData.h"
+#include "Components/PointLightComponent.h"
+#include "TimerManager.h"
 #include "AI/SoulsEnemyController.h"
 #include "AbilitySystem/Attributes/LyraCombatSet.h"
 #include "AbilitySystem/LyraAbilitySet.h"
@@ -107,6 +109,26 @@ void ASoulsEnemy::BeginPlay()
     {
         EnemyController->StartBehaviorFromPawnData();
     }
+}
+
+// 从武器一侧发出短暂的红光，提示半血后开放新招式。
+void ASoulsEnemy::PlayBossPhaseCue(float Duration)
+{
+    UPointLightComponent* Cue = NewObject<UPointLightComponent>(this);
+    Cue->SetupAttachment(GetRootComponent());
+    Cue->SetRelativeLocation(FVector(45.0, 0.0, 65.0));
+    Cue->SetLightColor(FLinearColor(1.0f, 0.13f, 0.025f));
+    Cue->SetIntensity(5000.0f);
+    Cue->SetAttenuationRadius(600.0f);
+    Cue->SetCastShadows(false);
+    Cue->RegisterComponent();
+
+    FTimerHandle CueTimer;
+    // 提示结束后释放临时光源，组件销毁时自动撤销回调。
+    GetWorldTimerManager().SetTimer(CueTimer, FTimerDelegate::CreateWeakLambda(Cue, [Cue]()
+    {
+        Cue->DestroyComponent();
+    }), Duration, false);
 }
 
 // 与 Lyra 的死亡移动清理同步结束控制器的战斗状态。

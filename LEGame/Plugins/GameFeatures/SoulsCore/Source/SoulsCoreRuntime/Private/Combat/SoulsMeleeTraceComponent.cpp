@@ -1,5 +1,8 @@
 #include "Combat/SoulsMeleeTraceComponent.h"
 
+#include "Animation/AnimMontage.h"
+#include "GameFramework/RootMotionSource.h"
+
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
 #include "Character/LyraHealthComponent.h"
@@ -51,15 +54,18 @@ void USoulsMeleeTraceComponent::BeginPlay()
 }
 
 // 只允许存活、配置完整的权威角色开始新的单次攻击。
-bool USoulsMeleeTraceComponent::BeginAttack()
+bool USoulsMeleeTraceComponent::BeginAttack(const USoulsAttackDefinition* Definition, float LungeDistance)
 {
     ACharacter* Character = GetPawn<ACharacter>();
     const ULyraHealthComponent* Health = ULyraHealthComponent::FindHealthComponent(GetOwner());
+    Definition = Definition ? Definition : DefaultAttackDefinition.Get();
     if (!Character || !Character->HasAuthority() || bAttackActive || !Weapon ||
-        !DefaultAttackDefinition || (Health && (Health->IsDeadOrDying() || Health->GetHealth() <= 0.0f)))
+        !Definition || (Health && (Health->IsDeadOrDying() || Health->GetHealth() <= 0.0f)))
     {
         return false;
     }
+    ActiveAttackDefinition = Definition;
+    ActiveLungeDistance = FMath::Max(0.0f, LungeDistance);
     bAttackActive = true;
     bHitWindowEnabled = false;
     AttackElapsed = 0.0f;
@@ -93,6 +99,50 @@ void USoulsMeleeTraceComponent::SetHitWindowEnabled(bool bEnabled)
     }
 }
 
+// 窗口来源必须与本招动作一致，突刺沿已经承诺的朝向做碰撞位移。
+void USoulsMeleeTraceComponent::SetMontageHitWindow(const UAnimSequenceBase* Animation, bool bEnabled,
+    float NotifyDuration)
+{
+    const USoulsAttackDefinition* Definition = ActiveAttackDefinition.Get();
+    if (!bAttackActive || !Definition || Animation != Definition->AttackMontage.Get())
+    {
+        return;
+    }
+
+    if (!bEnabled)
+    {
+        StopLunge();
+    }
+    else if (!bHitWindowEnabled && ActiveLungeDistance > 0.0f && NotifyDuration > 0.0f)
+    {
+        if (ACharacter* Character = GetPawn<ACharacter>())
+        {
+            const TSharedPtr<FRootMotionSource_MoveToForce> Lunge = MakeShared<FRootMotionSource_MoveToForce>();
+            Lunge->InstanceName = TEXT("SoulsBossLunge");
+            Lunge->Duration = NotifyDuration / FMath::Max(Definition->PlayRate, 0.1f);
+            Lunge->StartLocation = Character->GetActorLocation();
+            Lunge->TargetLocation = Lunge->StartLocation + Character->GetActorForwardVector() * ActiveLungeDistance;
+            Lunge->bRestrictSpeedToExpected = true;
+            Lunge->FinishVelocityParams.Mode = ERootMotionFinishVelocityMode::SetVelocity;
+            LungeSourceId = Character->GetCharacterMovement()->ApplyRootMotionSource(Lunge);
+        }
+    }
+    SetHitWindowEnabled(bEnabled);
+}
+
+// 为取消、死亡和关窗共用同一条突刺回收路径。
+void USoulsMeleeTraceComponent::StopLunge()
+{
+    if (LungeSourceId != 0)
+    {
+        if (ACharacter* Character = GetPawn<ACharacter>())
+        {
+            Character->GetCharacterMovement()->RemoveRootMotionSourceByID(LungeSourceId);
+        }
+        LungeSourceId = 0;
+    }
+}
+
 // 释放攻击状态，死亡时不重新开启角色移动。
 void USoulsMeleeTraceComponent::EndAttack()
 {
@@ -100,6 +150,9 @@ void USoulsMeleeTraceComponent::EndAttack()
     {
         return;
     }
+    StopLunge();
+    ActiveAttackDefinition.Reset();
+    ActiveLungeDistance = 0.0f;
     bAttackActive = false;
     bHitWindowEnabled = false;
     SetComponentTickEnabled(false);
@@ -134,7 +187,7 @@ bool USoulsMeleeTraceComponent::IsHitWindowEnabled() const
 // 返回配置供能力创建 Montage 和伤害效果。
 const USoulsAttackDefinition* USoulsMeleeTraceComponent::GetAttackDefinition() const
 {
-    return DefaultAttackDefinition;
+    return bAttackActive ? ActiveAttackDefinition.Get() : DefaultAttackDefinition.Get();
 }
 
 // 返回实际附着的武器供效果来源和测试使用。
@@ -147,7 +200,8 @@ ASoulsMeleeWeapon* USoulsMeleeTraceComponent::GetWeapon() const
 void USoulsMeleeTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-    if (!bAttackActive || !Weapon || !DefaultAttackDefinition || !GetOwner()->HasAuthority())
+    const USoulsAttackDefinition* Definition = ActiveAttackDefinition.Get();
+    if (!bAttackActive || !Weapon || !Definition || !GetOwner()->HasAuthority())
     {
         EndAttack();
         return;
@@ -159,14 +213,14 @@ void USoulsMeleeTraceComponent::TickComponent(float DeltaTime, ELevelTick TickTy
         EndAttack();
         return;
     }
-    if (!bHitWindowEnabled && AttackElapsed < DefaultAttackDefinition->TurnDuration)
+    if (!bHitWindowEnabled && AttackElapsed < Definition->TurnDuration)
     {
         const USoulsLockOnComponent* Lock = Character->FindComponentByClass<USoulsLockOnComponent>();
         if (const AActor* Target = Lock ? Lock->GetTargetActor() : nullptr)
         {
             const FRotator Desired = (Target->GetActorLocation() - Character->GetActorLocation()).Rotation();
             const float Yaw = FMath::FixedTurn(Character->GetActorRotation().Yaw, Desired.Yaw,
-                DefaultAttackDefinition->TurnRate * DeltaTime);
+                Definition->TurnRate * DeltaTime);
             Character->SetActorRotation(FRotator(0.0f, Yaw, 0.0f));
         }
     }
@@ -183,7 +237,7 @@ void USoulsMeleeTraceComponent::SampleWeaponTrajectory()
     const FTransform Current = Weapon->GetActorTransform();
     const FTransform Previous = PreviousWeaponTransform;
     PreviousWeaponTransform = Current;
-    const USoulsAttackDefinition* Definition = DefaultAttackDefinition;
+    const USoulsAttackDefinition* Definition = ActiveAttackDefinition.Get();
     const float Travel = FMath::Max(
         FVector::Distance(Previous.TransformPosition(LocalBladeRoot), Current.TransformPosition(LocalBladeRoot)),
         FVector::Distance(Previous.TransformPosition(LocalBladeTip), Current.TransformPosition(LocalBladeTip)));
@@ -224,7 +278,7 @@ void USoulsMeleeTraceComponent::SampleWeaponTrajectory()
 // 有效期开始就检查刀刃覆盖区域，包含上一帧已接触的目标。
 void USoulsMeleeTraceComponent::CheckInitialOverlap()
 {
-    const int32 Samples = FMath::Clamp(DefaultAttackDefinition->BladeSampleCount, 2, 32);
+    const int32 Samples = FMath::Clamp(ActiveAttackDefinition->BladeSampleCount, 2, 32);
     FCollisionQueryParams Parameters(SCENE_QUERY_STAT(SoulsMeleeInitial), false, GetOwner());
     Parameters.AddIgnoredActor(Weapon);
     for (int32 Index = 0; Index < Samples && bHitWindowEnabled; ++Index)
@@ -233,7 +287,7 @@ void USoulsMeleeTraceComponent::CheckInitialOverlap()
             FMath::Lerp(LocalBladeRoot, LocalBladeTip, static_cast<float>(Index) / (Samples - 1)));
         TArray<FOverlapResult> Overlaps;
         GetWorld()->OverlapMultiByChannel(Overlaps, Point, FQuat::Identity, TraceChannel,
-            FCollisionShape::MakeSphere(FMath::Max(DefaultAttackDefinition->TraceRadius, 1.0f)), Parameters);
+            FCollisionShape::MakeSphere(FMath::Max(ActiveAttackDefinition->TraceRadius, 1.0f)), Parameters);
         for (const FOverlapResult& Overlap : Overlaps)
         {
             if (Overlap.GetActor() && Overlap.GetComponent())

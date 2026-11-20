@@ -28,6 +28,9 @@ public:
     UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Souls|AI", meta = (WorldContext = "WorldContextObject"))
     static ASoulsEnemy* SpawnFromAIPawnData(UObject* WorldContextObject, UAIPawnData* Data, const FTransform& SpawnTransform);
 
+    // 半血时给当前 Boss 播放一次短暂的红光提示。
+    void PlayBossPhaseCue(float Duration);
+
 protected:
     // 配置属性与武器并在服务端启动控制器。
     virtual void BeginPlay() override;

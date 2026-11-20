@@ -1,6 +1,7 @@
 #include "AI/SoulsEnemyController.h"
 
 #include "AI/AIPawnData.h"
+#include "AI/SoulsBossProfile.h"
 #include "AI/SoulsEnemy.h"
 #include "AI/SoulsEnemyBehavior.h"
 #include "AbilitySystem/LyraAbilitySystemComponent.h"
@@ -9,6 +10,8 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "BehaviorTree/BlackboardData.h"
 #include "Character/LyraHealthComponent.h"
+#include "Combat/SoulsAttackDefinition.h"
+#include "Combat/SoulsMeleeTraceComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -66,6 +69,11 @@ void ASoulsEnemyController::StartBehaviorFromPawnData()
         return;
     }
 
+    if (!InitializeBossProfile(*Data))
+    {
+        return;
+    }
+
     UBehaviorTree* Tree = Data->BehaviorTree.Get();
     if (!Tree)
     {
@@ -116,6 +124,9 @@ void ASoulsEnemyController::StopCombat()
     {
         Enemy->GetLyraAbilitySystemComponent()->CancelAbilities(&GetLightAttackTags());
     }
+    bAwaitingBossAttackTaskFinish = false;
+    bUsesBossProfile = false;
+    LoadedBossDefinitions.Reset();
     ClearTarget();
     if (UBlackboardComponent* BlackboardComp = GetBlackboardComponent())
     {
@@ -186,7 +197,7 @@ void ASoulsEnemyController::RefreshEnemyContext()
 
     APawn* CurrentTarget = Target.Get();
     bool bVisible = false;
-    bool bInAttackRange = false;
+    double VisibleTargetDistanceSquared = 0.0;
     if (!bReturningHome && (CurrentTarget || LastSeenTime >= 0.0))
     {
         const FVector EnemyLocation = Enemy->GetNavAgentLocation();
@@ -202,7 +213,7 @@ void ASoulsEnemyController::RefreshEnemyContext()
             const FVector SeenLocation = CurrentTarget->GetNavAgentLocation();
             BlackboardComp->SetValueAsVector(SoulsEnemyBlackboard::LastSeenLocation, SeenLocation);
             LastSeenTime = Now;
-            bInAttackRange = FVector::DistSquared(EnemyLocation, SeenLocation) <= FMath::Square(Data.AttackRange);
+            VisibleTargetDistanceSquared = FVector::DistSquared(EnemyLocation, SeenLocation);
         }
         else if (Now - LastSeenTime >= Data.SightGracePeriod)
         {
@@ -211,6 +222,10 @@ void ASoulsEnemyController::RefreshEnemyContext()
     }
 
     BlackboardComp->SetValueAsObject(SoulsEnemyBlackboard::TargetActor, bVisible ? CurrentTarget : nullptr);
+    if (bVisible)
+    {
+        TryEnterBossPhaseTwo(*Enemy, Now);
+    }
     ESoulsEnemyIntent Intent = ESoulsEnemyIntent::Idle;
     if (IsHitReacting())
     {
@@ -220,14 +235,18 @@ void ASoulsEnemyController::RefreshEnemyContext()
     {
         Intent = ESoulsEnemyIntent::ReturnHome;
     }
-    else if (IsAttacking())
+    else if (IsAttacking() || bAwaitingBossAttackTaskFinish)
     {
         const bool bAttackTaskActive = BlackboardComp->GetValueAsEnum(SoulsEnemyBlackboard::Intent) == uint8(ESoulsEnemyIntent::Attack);
         Intent = bAttackTaskActive ? ESoulsEnemyIntent::Attack : ESoulsEnemyIntent::Hold;
     }
+    else if (bUsesBossProfile && Now < NextAttackTime)
+    {
+        Intent = ESoulsEnemyIntent::Hold;
+    }
     else if (bVisible)
     {
-        Intent = !bInAttackRange ? ESoulsEnemyIntent::Chase :
+        Intent = !IsWithinAttackRange(VisibleTargetDistanceSquared) ? ESoulsEnemyIntent::Chase :
             (Now >= NextAttackTime ? ESoulsEnemyIntent::Attack : ESoulsEnemyIntent::Hold);
     }
     else if (Target.IsValid())
@@ -313,7 +332,7 @@ ESoulsEnemyAttackResult ASoulsEnemyController::TryMeleeAttack(float DeltaSeconds
     const FVector EnemyLocation = Enemy->GetNavAgentLocation();
     const FVector TargetLocation = CurrentTarget->GetNavAgentLocation();
     const FVector Offset = TargetLocation - EnemyLocation;
-    if (Offset.SizeSquared() > FMath::Square(Data.AttackRange) ||
+    if (!IsWithinAttackRange(Offset.SizeSquared()) ||
         FVector::DistSquared(EnemyLocation, HomeLocation) > FMath::Square(Data.LeashRadius) ||
         FVector::DistSquared(TargetLocation, HomeLocation) > FMath::Square(Data.LeashRadius) || !LineOfSightTo(CurrentTarget))
     {
@@ -328,6 +347,18 @@ ESoulsEnemyAttackResult ASoulsEnemyController::TryMeleeAttack(float DeltaSeconds
     {
         return ESoulsEnemyAttackResult::Turning;
     }
+    if (bUsesBossProfile)
+    {
+        const FSoulsBossAttackOption* Option = SelectBossAttack(Offset.SizeSquared());
+        if (!Option || !TryActivateBossAttack(*Enemy, *Option))
+        {
+            return ESoulsEnemyAttackResult::Unavailable;
+        }
+        LastBossAttackId = Option->AttackId;
+        ActiveBossPause = Option->PostAttackPause;
+        bAwaitingBossAttackTaskFinish = true;
+        return ESoulsEnemyAttackResult::Started;
+    }
     return Enemy->GetLyraAbilitySystemComponent()->TryActivateAbilitiesByTag(GetLightAttackTags(), false)
         ? ESoulsEnemyAttackResult::Started : ESoulsEnemyAttackResult::Unavailable;
 }
@@ -338,11 +369,166 @@ void ASoulsEnemyController::ScheduleAttackRetry(bool bAttackStarted)
     const ASoulsEnemy* Enemy = Cast<ASoulsEnemy>(GetPawn());
     if (bBehaviorStarted && Enemy)
     {
-        const float Cooldown = bAttackStarted ? Enemy->GetAIPawnData()->AttackCooldown : 0.0f;
+        const float Cooldown = bAttackStarted
+            ? (bUsesBossProfile ? ActiveBossPause : Enemy->GetAIPawnData()->AttackCooldown) : 0.0f;
+        bAwaitingBossAttackTaskFinish = false;
+        ActiveBossPause = 0.0f;
         const double Now = GetWorld()->GetTimeSeconds();
         if (bAttackStarted || Now >= NextAttackTime)
         {
             NextAttackTime = Now + FMath::Max(Cooldown, AttackRetryDelay);
         }
     }
+}
+
+// 校验阶段覆盖、招式 ID 和动作资产，并用强引用保留实际参与战斗的定义。
+bool ASoulsEnemyController::InitializeBossProfile(const UAIPawnData& Data)
+{
+    const USoulsBossProfile& Profile = *GetDefault<USoulsBossProfile>();
+    bUsesBossProfile = Profile.PawnData.ToSoftObjectPath() == FSoftObjectPath(&Data);
+    bBossPhaseTwo = false;
+    bAwaitingBossAttackTaskFinish = false;
+    LastBossAttackId = NAME_None;
+    ActiveBossPause = 0.0f;
+    LoadedBossDefinitions.Reset();
+    if (!bUsesBossProfile)
+    {
+        return true;
+    }
+
+    TSet<FName> AttackIds;
+    float CoveredRange[] = {0.0f, 0.0f};
+    for (const FSoulsBossAttackOption& Option : Profile.AttackOptions)
+    {
+        USoulsAttackDefinition* Definition = Option.Definition.LoadSynchronous();
+        if (Option.AttackId.IsNone() || AttackIds.Contains(Option.AttackId) || !Definition ||
+            !Definition->AttackMontage || !Definition->DamageEffectClass ||
+            Option.MinPhase < 1 || Option.MinPhase > 2 || Option.MinRange < 0.0f ||
+            Option.MaxRange <= Option.MinRange || Option.PostAttackPause < 0.0f || Option.LungeDistance < 0.0f)
+        {
+            UE_LOG(LogTemp, Error, TEXT("Souls boss %s has invalid attack option %s"), *GetName(), *Option.AttackId.ToString());
+            return false;
+        }
+        for (int32 Phase = Option.MinPhase; Phase <= 2; ++Phase)
+        {
+            float& Covered = CoveredRange[Phase - 1];
+            if (Option.MinRange > Covered)
+            {
+                UE_LOG(LogTemp, Error, TEXT("Souls boss %s has a gap before %s in phase %d"),
+                    *GetName(), *Option.AttackId.ToString(), Phase);
+                return false;
+            }
+            Covered = FMath::Max(Covered, Option.MaxRange);
+        }
+        AttackIds.Add(Option.AttackId);
+        LoadedBossDefinitions.Add(Definition);
+    }
+    if (CoveredRange[0] <= 0.0f || Profile.PhaseTwoHealthFraction <= 0.0f || Profile.PhaseTwoHealthFraction >= 1.0f ||
+        Profile.PhaseChangePause <= 0.0f)
+    {
+        UE_LOG(LogTemp, Error, TEXT("Souls boss %s has invalid phase configuration"), *GetName());
+        return false;
+    }
+    return true;
+}
+
+// 阶段和距离先筛选，多个候选时优先选择与上一招不同的动作。
+const FSoulsBossAttackOption* ASoulsEnemyController::SelectBossAttack(double DistanceSquared) const
+{
+    const int32 Phase = bBossPhaseTwo ? 2 : 1;
+    const FSoulsBossAttackOption* Repeat = nullptr;
+    for (const FSoulsBossAttackOption& Option : GetDefault<USoulsBossProfile>()->AttackOptions)
+    {
+        if (Option.MinPhase > Phase || DistanceSquared < FMath::Square(Option.MinRange) ||
+            DistanceSquared > FMath::Square(Option.MaxRange))
+        {
+            continue;
+        }
+        if (Option.AttackId != LastBossAttackId)
+        {
+            return &Option;
+        }
+        Repeat = &Option;
+    }
+    return Repeat;
+}
+
+// 普通剑兵保持原有固定距离，Boss 用共享的招式判断控制追击与起手。
+bool ASoulsEnemyController::IsWithinAttackRange(double DistanceSquared) const
+{
+    const ASoulsEnemy* Enemy = Cast<ASoulsEnemy>(GetPawn());
+    const UAIPawnData* Data = Enemy ? Enemy->GetAIPawnData() : nullptr;
+    return Data && (bUsesBossProfile ? SelectBossAttack(DistanceSquared) != nullptr
+        : DistanceSquared <= FMath::Square(Data->AttackRange));
+}
+
+// 取本阶段可用招式的最远触发距离，供寻路任务设置停止位置。
+float ASoulsEnemyController::GetAttackApproachRange() const
+{
+    const ASoulsEnemy* Enemy = Cast<ASoulsEnemy>(GetPawn());
+    const UAIPawnData* Data = Enemy ? Enemy->GetAIPawnData() : nullptr;
+    if (!Data || !bUsesBossProfile)
+    {
+        return Data ? Data->AttackRange : 0.0f;
+    }
+
+    const int32 Phase = bBossPhaseTwo ? 2 : 1;
+    float Range = 0.0f;
+    for (const FSoulsBossAttackOption& Option : GetDefault<USoulsBossProfile>()->AttackOptions)
+    {
+        if (Option.MinPhase <= Phase)
+        {
+            Range = FMath::Max(Range, Option.MaxRange);
+        }
+    }
+    return Range;
+}
+
+// 仅免疫出招期间的普通受击硬直，生命结算与死亡能力照常执行。
+bool ASoulsEnemyController::HasBossAttackArmor() const
+{
+    return bUsesBossProfile && IsAttacking();
+}
+
+// 在空闲时应用半血阶段，保留上一招承诺并留出阶段提示时间。
+void ASoulsEnemyController::TryEnterBossPhaseTwo(ASoulsEnemy& Enemy, double Now)
+{
+    if (!bUsesBossProfile || bBossPhaseTwo || bReturningHome || IsHitReacting() || IsAttacking() ||
+        bAwaitingBossAttackTaskFinish)
+    {
+        return;
+    }
+    const USoulsBossProfile& Profile = *GetDefault<USoulsBossProfile>();
+    const ULyraHealthComponent* Health = ULyraHealthComponent::FindHealthComponent(&Enemy);
+    if (Health && Health->GetHealth() <= Health->GetMaxHealth() * Profile.PhaseTwoHealthFraction)
+    {
+        bBossPhaseTwo = true;
+        NextAttackTime = FMath::Max(NextAttackTime, Now + Profile.PhaseChangePause);
+        Enemy.PlayBossPhaseCue(Profile.PhaseChangePause);
+        UE_LOG(LogTemp, Verbose, TEXT("Souls boss %s entered phase two"), *GetName());
+    }
+}
+
+// 只在 GAS 和刀迹都保留本招状态时确认启动，排除同步播放失败。
+bool ASoulsEnemyController::TryActivateBossAttack(ASoulsEnemy& Enemy, const FSoulsBossAttackOption& Option)
+{
+    const USoulsAttackDefinition* Definition = Option.Definition.Get();
+    const USoulsMeleeTraceComponent* Trace = Enemy.FindComponentByClass<USoulsMeleeTraceComponent>();
+    if (!Definition || !Trace)
+    {
+        return false;
+    }
+    FGameplayEventData Event;
+    Event.EventTag = FGameplayTag::RequestGameplayTag(TEXT("Event.Souls.EnemyAttack"));
+    Event.Instigator = &Enemy;
+    Event.Target = &Enemy;
+    Event.OptionalObject = Definition;
+    Event.EventMagnitude = Option.LungeDistance;
+    const int32 Triggered = Enemy.GetLyraAbilitySystemComponent()->HandleGameplayEvent(Event.EventTag, &Event);
+    const bool bStarted = Triggered > 0 && IsAttacking() && Trace->IsAttackActive() &&
+        Trace->GetAttackDefinition() == Definition;
+    const double Distance = Target.IsValid() ? FVector::Dist(Enemy.GetNavAgentLocation(), Target->GetNavAgentLocation()) : 0.0;
+    UE_LOG(LogTemp, Verbose, TEXT("Souls boss %s attack %s phase %d distance %.1f cm started=%d"),
+        *GetName(), *Option.AttackId.ToString(), bBossPhaseTwo ? 2 : 1, Distance, bStarted);
+    return bStarted;
 }

@@ -1,5 +1,8 @@
 #include "Combat/SoulsGameplayAbility_HitReact.h"
 
+#include "AI/SoulsEnemyController.h"
+#include "GameFramework/Pawn.h"
+
 #include "Abilities/Tasks/AbilityTask_PlayMontageAndWait.h"
 #include "AbilitySystemComponent.h"
 #include "Animation/AnimMontage.h"
@@ -27,6 +30,17 @@ USoulsGameplayAbility_HitReact::USoulsGameplayAbility_HitReact(const FObjectInit
         Trigger.TriggerSource = EGameplayAbilityTriggerSource::GameplayEvent;
         AbilityTriggers.Add(Trigger);
     }
+}
+
+// 保留 Boss 当前出招，其他角色继续沿用原有的受击取消规则。
+bool USoulsGameplayAbility_HitReact::CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
+    const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags,
+    const FGameplayTagContainer* TargetTags, FGameplayTagContainer* OptionalRelevantTags) const
+{
+    const APawn* Pawn = ActorInfo ? Cast<APawn>(ActorInfo->AvatarActor.Get()) : nullptr;
+    const ASoulsEnemyController* Controller = Pawn ? Cast<ASoulsEnemyController>(Pawn->GetController()) : nullptr;
+    return (!Controller || !Controller->HasBossAttackArmor()) &&
+        Super::CanActivateAbility(Handle, ActorInfo, SourceTags, TargetTags, OptionalRelevantTags);
 }
 
 // 在硬直期间停下移动，动画缺失或播放失败时也能立即收尾。
