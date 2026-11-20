@@ -61,7 +61,8 @@ def validate_combat_content(load, cls, config, abilities, hero, actors):
             for entry in config.get_editor_property("mapping_context").get_editor_property("mappings")
             if entry.get_editor_property("action") == action]
     assert "LeftMouseButton" in keys and "Gamepad_RightShoulder" in keys
-    dummies = [actor for actor in actors if isinstance(actor, unreal.SoulsCombatDummy)]
+    dummies = [actor for actor in actors if isinstance(actor, unreal.SoulsCombatDummy)
+               and not isinstance(actor, unreal.SoulsEnemy)]
     assert len(dummies) >= 3, "骨骼战斗训练目标没有加入地图"
     for dummy in dummies:
         assert dummy.get_editor_property("team_id") == 2

@@ -1,6 +1,11 @@
 #include "SoulsEditorSetupLibrary.h"
 
+#include "AI/SoulsEnemyBehavior.h"
+#include "BehaviorTree/BehaviorTree.h"
+#include "BehaviorTree/BlackboardData.h"
+#include "BehaviorTreeGraph.h"
 #include "Blueprint/WidgetTree.h"
+#include "EdGraph/EdGraphSchema.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/ProgressBar.h"
@@ -8,8 +13,11 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/WorldSettings.h"
+#include "NavMesh/NavMeshBoundsVolume.h"
+#include "NavigationSystem.h"
 #include "UI/SoulsHUDWidget.h"
 #include "WidgetBlueprint.h"
 #include "UObject/UnrealType.h"
@@ -119,4 +127,55 @@ bool USoulsEditorSetupLibrary::ConfigureMap(UWorld* World, TSubclassOf<UObject> 
     Standalone->SetPropertyValue_InContainer(Settings, true);
     Settings->MarkPackageDirty();
     return true;
+}
+
+// 为脚本创建可编辑的树图，保留已有的行为树与黑板配置。
+bool USoulsEditorSetupLibrary::BuildEnemyBehaviorAssets(UBehaviorTree* Tree, UBlackboardData* Blackboard)
+{
+    if (!Tree || !Blackboard)
+    {
+        return false;
+    }
+    if (Tree->RootNode && Tree->BTGraph)
+    {
+        return Tree->BlackboardAsset == Blackboard && SoulsEnemyBlackboard::HasRequiredKeys(*Blackboard);
+    }
+    if (Tree->BTGraph || (!Tree->RootNode && !SoulsEnemyBlackboard::BuildDefaultTree(*Tree, *Blackboard)) ||
+        Tree->BlackboardAsset != Blackboard)
+    {
+        return false;
+    }
+
+    UBehaviorTreeGraph* Graph = CastChecked<UBehaviorTreeGraph>(FBlueprintEditorUtils::CreateNewGraph(
+        Tree, TEXT("Behavior Tree"), UBehaviorTreeGraph::StaticClass(), GetDefault<UBehaviorTreeGraph>()->Schema));
+    Tree->BTGraph = Graph;
+    Graph->GetSchema()->CreateDefaultNodesForGraph(*Graph);
+    // 导入完成前暂停图表更新，避免自动清理尚未挂到图上的分支条件。
+    Graph->LockUpdates();
+    Graph->OnCreated();
+    Graph->Initialize();
+    Graph->UnlockUpdates();
+    Graph->UpdateAsset();
+    Blackboard->MarkPackageDirty();
+    Tree->MarkPackageDirty();
+    return Tree->RootNode != nullptr;
+}
+
+// 直接构建导航，兼容交互编辑器和无窗口资产生成命令。
+bool USoulsEditorSetupLibrary::BuildMapNavigation(UWorld* World)
+{
+    UNavigationSystemV1* Navigation = World ? UNavigationSystemV1::GetCurrent(World) : nullptr;
+    if (!Navigation)
+    {
+        return false;
+    }
+    for (TActorIterator<ANavMeshBoundsVolume> It(World); It; ++It)
+    {
+        Navigation->OnNavigationBoundsUpdated(*It);
+    }
+    // 命令行资产生成没有常规编辑器帧，先处理新体积和场景物体的导航更新。
+    Navigation->Tick(0.0f);
+    Navigation->Build();
+    World->MarkPackageDirty();
+    return Navigation->GetDefaultNavDataInstance(FNavigationSystem::DontCreate) != nullptr;
 }

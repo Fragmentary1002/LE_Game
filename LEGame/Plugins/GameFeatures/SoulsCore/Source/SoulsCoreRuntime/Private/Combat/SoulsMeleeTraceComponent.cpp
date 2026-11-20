@@ -11,6 +11,7 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Targeting/SoulsLockOnComponent.h"
+#include "Teams/LyraTeamSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SoulsMeleeTraceComponent)
 
@@ -261,6 +262,13 @@ void USoulsMeleeTraceComponent::ProcessHit(const FHitResult& Hit)
     {
         return;
     }
+    // 无 PlayerState 的独立敌人仍按 Lyra 阵营过滤友军命中。
+    const ULyraTeamSubsystem* Teams = GetWorld()->GetSubsystem<ULyraTeamSubsystem>();
+    if (Teams && Teams->CompareTeams(GetOwner(), Target) == ELyraTeamComparison::OnSameTeam)
+    {
+        return;
+    }
+
     FVector Root;
     FVector Tip;
     Weapon->GetBladePoints(Root, Tip);

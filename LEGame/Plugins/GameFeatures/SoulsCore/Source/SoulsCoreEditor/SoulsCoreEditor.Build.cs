@@ -10,7 +10,8 @@ public class SoulsCoreEditor : ModuleRules
         PrivateDependencyModuleNames.AddRange(new[]
         {
             "UnrealEd", "UMGEditor", "Kismet", "SlateCore", "SoulsCoreRuntime", "LyraGame",
-            "EnhancedInput", "CommonUI", "CommonGame", "GameplayAbilities", "GameplayTags"
+            "EnhancedInput", "CommonUI", "CommonGame", "GameplayAbilities", "GameplayTags", "NavigationSystem",
+            "AIModule", "AIGraph", "BehaviorTreeEditor"
         });
     }
 }

@@ -1,4 +1,4 @@
-"""通过 UE5.4 编辑器生成 SoulsCore 蓝图、数据配置和 EmptySoulsMap。"""
+"""通过 UE5.4 编辑器生成 SoulsCore 资产。构建导航时通过 -ExecutePythonScript 运行。"""
 
 import unreal
 
@@ -317,6 +317,122 @@ def migrate_combat_map(dummy_class):
         raise RuntimeError("无法保存战斗地图迁移")
 
 
+# 复用已有导航范围；空关卡则添加覆盖测试地板的导航体积。
+def ensure_enemy_navigation(actors):
+    existing = next((actor for actor in actors.get_all_level_actors()
+                     if isinstance(actor, unreal.NavMeshBoundsVolume)), None)
+    if existing:
+        return False
+    nav = actors.spawn_actor_from_class(unreal.NavMeshBoundsVolume, unreal.Vector(0, 0, 100))
+    if not nav:
+        raise RuntimeError("无法创建敌人导航范围")
+    nav.set_actor_label("Souls_EnemyNavigation")
+    _, extent = nav.get_actor_bounds(False)
+    if min(extent.x, extent.y, extent.z) <= 0:
+        actors.destroy_actor(nav)
+        raise RuntimeError("敌人导航体积缺少有效的 Brush")
+    nav.set_actor_scale3d(unreal.Vector(2000 / extent.x, 2000 / extent.y, 300 / extent.z))
+    return True
+
+
+# 打开已有的 AI 资产，或通过引擎工厂创建新资产。
+def create_enemy_behavior_asset(path, asset_class, factory_class):
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        asset = require_asset(path)
+        if not isinstance(asset, asset_class):
+            raise RuntimeError("敌人 AI 资产类型不匹配：" + path)
+        return asset, False
+    package, name = path.rsplit("/", 1)
+    unreal.EditorAssetLibrary.make_directory(package)
+    asset = unreal.AssetToolsHelpers.get_asset_tools().create_asset(name, package, asset_class, factory_class())
+    if not asset:
+        raise RuntimeError("无法创建敌人 AI 资产：" + path)
+    return asset, True
+
+
+# 保存可在内容浏览器里修改的普通近战行为树和黑板。
+def create_enemy_behavior():
+    folder = ROOT + "/Enemies/AI"
+    blackboard, bb_new = create_enemy_behavior_asset(
+        folder + "/BB_SoulsEnemy_Melee", unreal.BlackboardData, unreal.BlackboardDataFactory)
+    tree, tree_new = create_enemy_behavior_asset(
+        folder + "/BT_SoulsEnemy_Melee", unreal.BehaviorTree, unreal.BehaviorTreeFactory)
+    if bb_new or tree_new or unreal.EditorAssetLibrary.get_metadata_tag(tree, SETUP_TAG) != SETUP_VERSION:
+        if not unreal.SoulsEditorSetupLibrary.build_enemy_behavior_assets(tree, blackboard):
+            raise RuntimeError("无法生成普通近战行为树：" + tree.get_path_name())
+        save(blackboard)
+        save(tree)
+    return tree
+
+
+# 创建普通剑兵的蓝图、能力集和出生数据，在地图上增加一只样例。
+def create_enemy_content(definition, weapon_class, ability_classes):
+    enemy, enemy_pending = create_blueprint(ROOT + "/Enemies/B_SoulsEnemy_Swordsman",
+        require_class("/Script/SoulsCoreRuntime.SoulsEnemy"))
+    if enemy_pending:
+        cdo = unreal.get_default_object(blueprint_class(enemy))
+        mesh = cdo.get_editor_property("mesh")
+        mesh.set_skeletal_mesh_asset(require_asset("/Game/Characters/Heroes/Mannequin/Meshes/SKM_Manny"))
+        mesh.set_anim_instance_class(require_class(
+            "/Game/Characters/Heroes/Mannequin/Animations/ABP_Mannequin_Base.ABP_Mannequin_Base_C"))
+        cdo.set_editor_property("unarmed_animation_layer", require_class(
+            "/Game/Characters/Heroes/Mannequin/Animations/Locomotion/Unarmed/ABP_UnarmedAnimLayers.ABP_UnarmedAnimLayers_C"))
+        save(enemy, True)
+
+    ability_set, abilities_pending = create_asset(ROOT + "/Enemies/AbilitySet_Souls_Swordsman",
+        require_class("/Script/LyraGame.LyraAbilitySet"))
+    if abilities_pending:
+        entries = [import_struct(unreal.LyraAbilitySet_GameplayAbility,
+                   '(Ability="{}",AbilityLevel=1)'.format(ability.get_path_name())) for ability in ability_classes]
+        ability_set.set_editor_property("granted_gameplay_abilities", entries)
+        save(ability_set)
+
+    behavior_tree = create_enemy_behavior()
+    enemy_class = blueprint_class(enemy)
+    data, data_pending = create_asset(ROOT + "/Enemies/DA_Souls_Swordsman",
+        require_class("/Script/SoulsCoreRuntime.AIPawnData"))
+    if data_pending:
+        data.set_editor_property("pawn_class", enemy_class)
+        data.set_editor_property("ability_sets", [ability_set])
+        data.set_editor_property("attack_definition", definition)
+        data.set_editor_property("weapon_class", weapon_class)
+        # 使用当前剑兵动作的刀刃覆盖距离，避免提前停步原地空挥。
+        data.set_editor_property("attack_range", 105.0)
+    needs_tree = not data.get_editor_property("behavior_tree")
+    if needs_tree:
+        data.set_editor_property("behavior_tree", behavior_tree)
+    if data_pending or needs_tree:
+        save(data)
+
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    if not levels.load_level(MAP_PATH):
+        raise RuntimeError("无法加载普通敌人测试关卡")
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    changed = ensure_enemy_navigation(actors)
+    label = "Souls_Enemy_Swordsman"
+    actor = next((item for item in actors.get_all_level_actors() if item.get_actor_label() == label), None)
+    if not actor:
+        actor = actors.spawn_actor_from_class(enemy_class, unreal.Vector(1000, -850, 100), unreal.Rotator(yaw=135.0))
+        if not actor:
+            raise RuntimeError("无法生成普通敌人样例")
+        actor.set_editor_property("ai_pawn_data", data)
+        actor.set_actor_label(label)
+        changed = True
+    elif not actor.get_editor_property("ai_pawn_data"):
+        actor.set_editor_property("ai_pawn_data", data)
+        changed = True
+    if changed:
+        if not unreal.SoulsEditorSetupLibrary.build_map_navigation(world):
+            raise RuntimeError("无法构建普通敌人关卡的导航数据")
+        feet = actor.get_actor_location() - unreal.Vector(0, 0, actor.capsule_component.get_scaled_capsule_half_height())
+        if unreal.NavigationSystemV1.project_point_to_navigation(world, feet, None, None, unreal.Vector(100, 100, 150)) is None:
+            raise RuntimeError("剑兵出生点附近没有导航网格，请通过 -ExecutePythonScript 在编辑器模式运行")
+        if not levels.save_current_level():
+            raise RuntimeError("无法保存普通敌人关卡配置")
+    unreal.log("SOULS_ENEMY_SETUP_COMPLETE: " + MAP_PATH)
+
+
 # 创建近战资产并显式迁移已有角色、输入和能力集，重复执行时保留用户改动。
 def create_combat_content(config, hero, abilities):
     sequence, sequence_pending = duplicate_combat_asset(ROOT + "/Combat/Animations/AS_Souls_LightAttack",
@@ -377,6 +493,7 @@ def create_combat_content(config, hero, abilities):
             "/Game/Characters/Heroes/Mannequin/Animations/Locomotion/Unarmed/ABP_UnarmedAnimLayers.ABP_UnarmedAnimLayers_C"))
         save_combat(dummy, True)
     migrate_combat_map(blueprint_class(dummy))
+    create_enemy_content(definition, blueprint_class(weapon), (attack_class, hit_class, death_class))
     unreal.log("SOULS_COMBAT_SETUP_COMPLETE: " + MAP_PATH)
 
 

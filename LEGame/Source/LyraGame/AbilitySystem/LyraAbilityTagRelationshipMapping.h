@@ -38,7 +38,7 @@ struct FLyraAbilityTagRelationship
 
 
 /** Mapping of how ability tags block or cancel other abilities */
-UCLASS()
+UCLASS(MinimalAPI)
 class ULyraAbilityTagRelationshipMapping : public UDataAsset
 {
 	GENERATED_BODY()

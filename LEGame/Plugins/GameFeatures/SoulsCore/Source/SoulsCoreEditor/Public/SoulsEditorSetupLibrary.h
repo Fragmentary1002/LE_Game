@@ -4,6 +4,8 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "SoulsEditorSetupLibrary.generated.h"
 
+class UBehaviorTree;
+class UBlackboardData;
 class UBlueprint;
 class UWidgetBlueprint;
 class UUserWidget;
@@ -30,4 +32,12 @@ public:
     // 为指定关卡写入 Lyra Experience、GameMode 和单人 PIE 设置。
     UFUNCTION(BlueprintCallable, Category = "Souls|Editor")
     static bool ConfigureMap(UWorld* World, TSubclassOf<UObject> ExperienceClass);
+
+    // 为新建的黑板和行为树生成普通剑兵的可编辑节点。
+    UFUNCTION(BlueprintCallable, Category = "Souls|Editor")
+    static bool BuildEnemyBehaviorAssets(UBehaviorTree* Tree, UBlackboardData* Blackboard);
+
+    // 构建关卡导航数据，不依赖交互编辑器的进度窗口。
+    UFUNCTION(BlueprintCallable, Category = "Souls|Editor")
+    static bool BuildMapNavigation(UWorld* World);
 };
