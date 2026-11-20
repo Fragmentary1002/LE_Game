@@ -410,24 +410,29 @@ def create_enemy_content(definition, weapon_class, ability_classes):
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     changed = ensure_enemy_navigation(actors)
-    label = "Souls_Enemy_Swordsman"
-    actor = next((item for item in actors.get_all_level_actors() if item.get_actor_label() == label), None)
-    if not actor:
-        actor = actors.spawn_actor_from_class(enemy_class, unreal.Vector(1000, -850, 100), unreal.Rotator(yaw=135.0))
-        if not actor:
-            raise RuntimeError("无法生成普通敌人样例")
-        actor.set_editor_property("ai_pawn_data", data)
-        actor.set_actor_label(label)
+    by_label = {actor.get_actor_label(): actor for actor in actors.get_all_level_actors()}
+    legacy = by_label.get("Souls_Enemy_Swordsman")
+    anchor = by_label.get("Souls_EnemySpawn_Swordsman")
+    if not anchor:
+        position = legacy.get_actor_location() if legacy else unreal.Vector(1000, -850, 100)
+        rotation = legacy.get_actor_rotation() if legacy else unreal.Rotator(yaw=135.0)
+        anchor = actors.spawn_actor_from_class(unreal.SoulsEnemySpawnPoint, position, rotation)
+        if not anchor:
+            raise RuntimeError("无法生成剑兵出生锚点")
+        anchor.set_actor_label("Souls_EnemySpawn_Swordsman")
         changed = True
-    elif not actor.get_editor_property("ai_pawn_data"):
-        actor.set_editor_property("ai_pawn_data", data)
+    if not anchor.get_editor_property("pawn_data"):
+        anchor.set_editor_property("pawn_data", (legacy.get_editor_property("ai_pawn_data") if legacy else None) or data)
         changed = True
-    if changed:
+    if changed or legacy:
         if not unreal.SoulsEditorSetupLibrary.build_map_navigation(world):
             raise RuntimeError("无法构建普通敌人关卡的导航数据")
-        feet = actor.get_actor_location() - unreal.Vector(0, 0, actor.capsule_component.get_scaled_capsule_half_height())
+        capsule = unreal.get_default_object(enemy_class).get_component_by_class(unreal.CapsuleComponent)
+        feet = anchor.get_actor_location() - unreal.Vector(0, 0, capsule.get_scaled_capsule_half_height())
         if unreal.NavigationSystemV1.project_point_to_navigation(world, feet, None, None, unreal.Vector(100, 100, 150)) is None:
             raise RuntimeError("剑兵出生点附近没有导航网格，请通过 -ExecutePythonScript 在编辑器模式运行")
+        if legacy and not actors.destroy_actor(legacy):
+            raise RuntimeError("无法移除已迁移的直放剑兵")
         if not levels.save_current_level():
             raise RuntimeError("无法保存普通敌人关卡配置")
     unreal.log("SOULS_ENEMY_SETUP_COMPLETE: " + MAP_PATH)
@@ -495,6 +500,40 @@ def create_combat_content(config, hero, abilities):
     migrate_combat_map(blueprint_class(dummy))
     create_enemy_content(definition, blueprint_class(weapon), (attack_class, hit_class, death_class))
     unreal.log("SOULS_COMBAT_SETUP_COMPLETE: " + MAP_PATH)
+
+
+# 迁移已有地图入口，并给样例篝火绑定独立的重生点。
+def configure_progress_map(experience_class):
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    unreal_editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    if not levels.load_level(MAP_PATH):
+        raise RuntimeError("无法加载篝火测试关卡")
+    world = unreal_editor.get_editor_world()
+    by_label = {actor.get_actor_label(): actor for actor in actors.get_all_level_actors()}
+    start = by_label.get("Souls_PlayerStart")
+    if not start:
+        raise RuntimeError("缺少样例地图的 Souls_PlayerStart")
+    start.set_editor_property("player_start_tag", unreal.Name("SoulsDefaultStart"))
+
+    checkpoint = by_label.get("Souls_CheckpointStart")
+    if not checkpoint:
+        position = start.get_actor_location() + unreal.Vector(0, 450, 0)
+        checkpoint = actors.spawn_actor_from_class(unreal.LyraPlayerStart, position, start.get_actor_rotation())
+        if not checkpoint:
+            raise RuntimeError("无法创建篝火重生点")
+        checkpoint.set_actor_label("Souls_CheckpointStart")
+
+    bonfire = by_label.get("Souls_Bonfire")
+    if not bonfire:
+        position = checkpoint.get_actor_location() + unreal.Vector(120, 0, -50)
+        bonfire = actors.spawn_actor_from_class(unreal.SoulsBonfire, position)
+        if not bonfire:
+            raise RuntimeError("无法创建样例篝火")
+        bonfire.set_actor_label("Souls_Bonfire")
+    bonfire.set_editor_property("checkpoint_start", checkpoint)
+    if not unreal.SoulsEditorSetupLibrary.configure_map(world, experience_class) or not levels.save_current_level():
+        raise RuntimeError("无法保存样例地图的魂类玩法入口")
 
 
 # 按依赖顺序创建并连接插件入口、角色、相机、HUD、Experience 和地图。
@@ -567,6 +606,7 @@ def main():
         save(target, True)
     create_test_map(blueprint_class(experience), blueprint_class(target))
     create_combat_content(config, hero, abilities)
+    configure_progress_map(blueprint_class(experience))
     unreal.log("SOULS_SETUP_COMPLETE: " + MAP_PATH)
 
 

@@ -1,6 +1,7 @@
 #include "SoulsEditorSetupLibrary.h"
 
 #include "AI/SoulsEnemyBehavior.h"
+#include "GameModes/SoulsGameMode.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "BehaviorTree/BlackboardData.h"
 #include "BehaviorTreeGraph.h"
@@ -106,7 +107,7 @@ bool USoulsEditorSetupLibrary::ConfigureMap(UWorld* World, TSubclassOf<UObject> 
 {
     AWorldSettings* Settings = World ? World->GetWorldSettings() : nullptr;
     UClass* ExperienceBase = LoadClass<UObject>(nullptr, TEXT("/Script/LyraGame.LyraExperienceDefinition"));
-    UClass* GameMode = LoadClass<AGameModeBase>(nullptr, TEXT("/Game/B_LyraGameMode.B_LyraGameMode_C"));
+    UClass* GameMode = ASoulsGameMode::StaticClass();
     if (!Settings || !ExperienceClass || !ExperienceBase || !ExperienceClass->IsChildOf(ExperienceBase) || !GameMode)
     {
         return false;

@@ -5,8 +5,12 @@
 #include "Combat/SoulsCombatReactionComponent.h"
 #include "Combat/SoulsMeleeTraceComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "GameModes/SoulsGameMode.h"
 #include "Player/LyraPlayerState.h"
 #include "Targeting/SoulsLockOnComponent.h"
 
@@ -40,6 +44,12 @@ void ASoulsCharacter::PossessedBy(AController* NewController)
     Super::PossessedBy(NewController);
     if (HasAuthority())
     {
+        if (IsPlayerControlled())
+        {
+            // 首次有效步行更新前，使用占有时的脚下位置作为掉魂落点。
+            SafeSoulDropLocation = GetCharacterMovement()->GetActorFeetLocation();
+        }
+
         if (ALyraPlayerState* SoulsPlayerState = GetPlayerState<ALyraPlayerState>())
         {
             if (SoulsPlayerState->GetGenericTeamId() == FGenericTeamId::NoTeam)
@@ -54,8 +64,60 @@ void ASoulsCharacter::PossessedBy(AController* NewController)
 void ASoulsCharacter::BeginPlay()
 {
     Super::BeginPlay();
+    if (HasAuthority())
+    {
+        OnCharacterMovementUpdated.AddDynamic(this, &ThisClass::UpdateSafeGroundLocation);
+    }
+
     if (UnarmedAnimationLayer)
     {
         GetMesh()->LinkAnimClassLayers(UnarmedAnimationLayer);
+    }
+}
+
+// 仅用普通步行模式下的可行走地面刷新落点，坠落和死亡停步时保留上一处位置。
+void ASoulsCharacter::UpdateSafeGroundLocation(float, FVector, FVector)
+{
+    const UCharacterMovementComponent* Movement = GetCharacterMovement();
+    if (IsPlayerControlled() && Movement->MovementMode == MOVE_Walking && Movement->CurrentFloor.IsWalkableFloor())
+    {
+        SafeSoulDropLocation = Movement->GetActorFeetLocation();
+    }
+}
+
+// 保留 Lyra 的死亡开始处理，并在当前玩家 Pawn 解绑前报告死亡。
+void ASoulsCharacter::OnDeathStarted(AActor* OwningActor)
+{
+    Super::OnDeathStarted(OwningActor);
+    if (!HasAuthority() || OwningActor != this)
+    {
+        return;
+    }
+
+    APlayerController* Player = GetController<APlayerController>();
+    if (!Player || Player->GetPawn() != this)
+    {
+        return;
+    }
+
+    if (ASoulsGameMode* GameMode = GetWorld()->GetAuthGameMode<ASoulsGameMode>())
+    {
+        GameMode->RecordPlayerDeath(Player, SafeSoulDropLocation);
+    }
+}
+
+// 通过角色现有输入组件提供样例地图的 E 键交互。
+void ASoulsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+    Super::SetupPlayerInputComponent(PlayerInputComponent);
+    PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &ThisClass::InputInteract);
+}
+
+// 让权威 GameMode 统一选择并校验可交互目标。
+void ASoulsCharacter::InputInteract()
+{
+    if (ASoulsGameMode* GameMode = GetWorld()->GetAuthGameMode<ASoulsGameMode>())
+    {
+        GameMode->RequestInteraction(GetController<APlayerController>());
     }
 }

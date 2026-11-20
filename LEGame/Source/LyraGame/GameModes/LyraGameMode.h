@@ -32,7 +32,7 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FOnLyraGameModePlayerInitialized, AGameMode
  *	The base game mode class used by this project.
  */
 UCLASS(Config = Game, Meta = (ShortTooltip = "The base game mode class used by this project."))
-class ALyraGameMode : public AModularGameModeBase
+class LYRAGAME_API ALyraGameMode : public AModularGameModeBase
 {
 	GENERATED_BODY()
 
@@ -70,7 +70,8 @@ public:
 	FOnLyraGameModePlayerInitialized OnGameModePlayerInitialized;
 
 protected:	
-	void OnExperienceLoaded(const ULyraExperienceDefinition* CurrentExperience);
+	// Experience 就绪后启动当前玩法的玩家生成流程。
+	virtual void OnExperienceLoaded(const ULyraExperienceDefinition* CurrentExperience);
 	bool IsExperienceLoaded() const;
 
 	void OnMatchAssignmentGiven(FPrimaryAssetId ExperienceId, const FString& ExperienceIdSource);

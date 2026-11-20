@@ -35,7 +35,7 @@ class SOULSCORERUNTIME_API USoulsCombatActionComponent : public UPawnComponent
 
 public:
     // 初始化可复制的动作组件，空闲时不开启 Tick。
-    USoulsCombatActionComponent();
+    USoulsCombatActionComponent(const FObjectInitializer& ObjectInitializer);
 
     // 复制翻滚状态，供拥有者限制普通移动和朝向。
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;

@@ -45,7 +45,8 @@ USoulsRollImmunityEffect::USoulsRollImmunityEffect()
 }
 
 // 只在有翻滚或精力缺口时启用服务器 Tick。
-USoulsCombatActionComponent::USoulsCombatActionComponent()
+USoulsCombatActionComponent::USoulsCombatActionComponent(const FObjectInitializer& ObjectInitializer)
+    : Super(ObjectInitializer)
 {
     SetIsReplicatedByDefault(true);
     PrimaryComponentTick.bCanEverTick = true;

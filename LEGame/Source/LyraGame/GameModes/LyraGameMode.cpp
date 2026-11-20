@@ -302,6 +302,7 @@ void ALyraGameMode::OnMatchAssignmentGiven(FPrimaryAssetId ExperienceId, const F
 	}
 }
 
+// 体验加载完成后启动已登录玩家，派生玩法可以覆盖此入口。
 void ALyraGameMode::OnExperienceLoaded(const ULyraExperienceDefinition* CurrentExperience)
 {
 	// Spawn any players that are already attached
