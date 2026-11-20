@@ -21,6 +21,7 @@ ASoulsCharacter::ASoulsCharacter(const FObjectInitializer& ObjectInitializer)
     CombatReaction = CreateDefaultSubobject<USoulsCombatReactionComponent>(TEXT("CombatReaction"));
     GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel6, ECR_Overlap);
     GetMesh()->SetCollisionResponseToChannel(ECC_GameTraceChannel6, ECR_Ignore);
+    GetMesh()->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
     bUseControllerRotationYaw = false;
     UCharacterMovementComponent* Movement = GetCharacterMovement();
     Movement->bOrientRotationToMovement = true;

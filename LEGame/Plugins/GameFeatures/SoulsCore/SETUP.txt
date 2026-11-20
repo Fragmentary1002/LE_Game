@@ -29,45 +29,78 @@ CM_Souls_Free 和 CM_Souls_LockOn。
 /SoulsCore/Experiences/LAS_Souls_HUD
   配置 HUD 蓝图及 UI 层。
 /SoulsCore/Characters/B_Hero_Souls
-  Manny 网格、Lyra 基础动画及无武器动画层；自由/锁定移动组件。
+  Manny 网格、Lyra 基础动画及无武器动画层；自由/锁定移动、武器轨迹和受击反应组件。
 /SoulsCore/Characters/HeroData_Souls
   配置角色、能力集、输入和两种相机。
 /SoulsCore/Characters/AbilitySet_Souls
-  复用 GA_Hero_Death 的基础死亡能力。
+  授予轻攻击、方向受击和 Souls 死亡能力，配置 LyraCombatSet 与攻击属性初始化效果。
 /SoulsCore/Camera/CM_Souls_Free
 /SoulsCore/Camera/CM_Souls_LockOn
   调整视野、镜头距离曲线、过渡速度和锁定跟踪速度。
 /SoulsCore/Input/InputConfig_Souls
 /SoulsCore/Input/IMC_Souls
 /SoulsCore/Input/Actions/IA_*_Souls
-  五个动作和十二条键鼠/手柄映射，可独立调整。
+  保留五个基础动作，新增 IA_Souls_LightAttack，共十四条键鼠/手柄映射，可独立调整。
 /SoulsCore/UI/W_SoulsHUD
   可在 UMG 设计器调整布局。保留 PlayerHealthText、PlayerHealthBar、
   TargetText、TargetHealthBar 的名称和类型，以便原生代码绑定。
 /SoulsCore/Development/B_SoulsTrainingTarget
   可锁定训练目标；生命值经过 GAS 和 LyraHealthComponent。
+/SoulsCore/Combat/DA_Souls_LightAttack
+  配置攻击 Montage、伤害效果、播放速度、刀刃采样、轨迹子步和起手转向参数。
+/SoulsCore/Combat/Weapons/B_SoulsWeapon_TestSword
+  方块占位刀刃与 BladeRoot/BladeTip 采样点，可替换为正式武器表现。
+/SoulsCore/Combat/Animations/AS_Souls_LightAttack
+/SoulsCore/Combat/Animations/AM_Souls_LightAttack
+  从 Rifle Melee 复制的攻击动画及 Montage，包含 Souls 命中窗口通知。
+/SoulsCore/Combat/Abilities/GA_Souls_LightAttack
+/SoulsCore/Combat/Abilities/GA_Souls_HitReact
+/SoulsCore/Combat/Abilities/GA_Souls_Death
+  配置单次攻击、四向受击和死亡动画；普通受击与死亡会打断攻击。
+/SoulsCore/Combat/Effects/GE_Souls_CombatInit
+/SoulsCore/Combat/Effects/GE_Souls_MeleeDamage
+  初始化 BaseDamage=25，使用 LyraDamageExecution 结算真实轨迹命中的伤害。
+/SoulsCore/Development/B_SoulsCombatDummy
+  带 Manny 骨骼、独立 ASC、方向受击和死亡能力的训练敌人，默认100生命、敌方队伍2。
 /SoulsCore/Maps/EmptySoulsMap
   从 StarterContent/Maps/Minimal_Default 复制，清理演示桌椅，
-  配置测试地面、出生点、两个训练目标和相机碰撞墙。
+  配置测试地面、出生点、两个圆柱训练目标、三个骨骼战斗目标、相机碰撞墙和近战遮挡墙。
+
+当前共二十九个玩法资产：十八个既有资产和十一个新增战斗资产。
 
 默认操作
 --------
 WASD / 左摇杆：移动。
 鼠标 / 右摇杆：自由观察。
+鼠标左键 / 手柄 RB：单次轻攻击；持续按住不会自动连砍。
 鼠标中键 / 按下右摇杆：锁定或解除锁定。
 Q、E / 滚轮 / 锁定时横向拨动右摇杆：切换目标。
 右摇杆回中后才允许再次切换。
+
+近战行为
+--------
+攻击由 GAS 能力驱动，动画通知仅在有效窗口内开启刀刃多点跨帧 Sweep。
+一次攻击对同一目标最多造成一次伤害，环境遮挡会阻止墙后目标命中。
+起手短时间内允许锁定转向，进入动作承诺后不持续追踪目标。
+实际掉血且存活时播放方向受击，致死伤害直接进入死亡动作。
+受击、死亡、取消和动画异常中断都会关闭攻击窗口并清理临时移动状态。
+骨骼训练目标不主动攻击。玩家死亡后需停止 PIE 后重开，或重新打开关卡。
 
 验证
 ----
 已通过 LyraEditor Win64 Development 的 UHT、C++ 编译和 DLL 链接。
 Content/Python/validate_souls_core.py 在新编辑器进程中检查资产引用，
-编译六个蓝图并验证输入映射和地图配置。报告输出到
+编译十三个蓝图并验证基础/战斗能力、伤害执行、动画窗口、输入映射和地图配置。报告输出到
 Saved/SoulsCore/ContentValidation.json。
 Session Frontend > Automation 中可运行 SoulsCore.Experience.EmptySoulsMap。
 该测试实际启动 PIE，验证角色生成、相机配置、输入映射、HUD 控件绑定、
 锁定、目标切换、伤害血条更新以及目标死亡后解除锁定。
+SoulsCore.Combat.SingleAttackLoop 实际启动 PIE，验证真实 Montage 开窗和刀刃命中、
+25点伤害、跨帧去重、空挥、重复攻击拒绝、取消清理、受击打断、受击后恢复移动、
+墙体遮挡对照、致死处理、死亡解除锁定和玩家死亡后禁止攻击。
+最近一次两项 PIE 测试均成功，零失败。报告输出到 Saved/SoulsCore/CombatAutomation/index.json。
 自动测试使用 NullRHI；画面表现、动画自然度和手柄手感仍需人工试玩。
+低帧率轨迹覆盖与真实操作手感尚未完成人工验收。
 
 生成工具
 --------
@@ -75,9 +108,14 @@ Content/Python/setup_souls_core.py 可从编辑器 Tools > Execute Python Script
 SoulsCoreEditor 模块处理 Python 未导出的 WidgetTree、HUD Action 和地图属性。
 工具通过完成标记跳过已初始化资产和地图，保留之后的设计调整。
 生成失败时没有完成标记的资产会在下次执行时继续配置。
+战斗迁移使用独立 CombatVersion 标记，显式补入旧输入和能力配置，替换旧死亡能力，
+并在既有地图添加骨骼目标与遮挡墙；不要求删除旧资产重新生成。
+已重跑生成脚本检查幂等性，二十九个资产的 SHA256 全部一致，零变化。
 
 当前范围
 --------
-面向单人玩法。包含角色初始化、自由/锁定移动、相机、基础生命 HUD 和训练目标。
-锁定状态尚未实现联网服务端裁定。
-尚不包含攻击、翻滚、精力、篝火、存档和自动复活。
+面向单机/Standalone，轻攻击能力使用 ServerOnly，真实伤害由 Authority 结算。
+包含角色初始化、自由/锁定移动、相机、基础生命 HUD、单次攻击、刀刃轨迹、方向受击和死亡。
+锁定状态尚未实现联网服务端裁定，也未实现远端攻击请求、客户端预测或命中回溯。
+方块刀刃和复用的 Rifle Melee 用于验证流程，尚非正式剑术动作或成品武器美术。
+尚不包含主动战斗 AI、连段、翻滚、精力、韧性、篝火、存档和自动复活。
