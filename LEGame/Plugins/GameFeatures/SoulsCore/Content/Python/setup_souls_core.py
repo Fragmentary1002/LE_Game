@@ -7,6 +7,8 @@ MAP_PATH = ROOT + "/Maps/EmptySoulsMap"
 MAP_TEMPLATE = "/Game/StarterContent/Maps/Minimal_Default"
 SETUP_VERSION = "2"
 SETUP_TAG = "SoulsCore.SetupVersion"
+COMBAT_VERSION = "1"
+COMBAT_TAG = "SoulsCore.CombatVersion"
 
 
 # 加载必要的反射类型，类型缺失时立即停止。
@@ -190,6 +192,194 @@ def create_test_map(experience_class, target_class):
         raise RuntimeError("无法保存 EmptySoulsMap")
 
 
+# 复制可编辑的战斗资源，完成迁移后保留设计师后续调整。
+def duplicate_combat_asset(path, source_path):
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        asset = require_asset(path)
+    else:
+        package, name = path.rsplit("/", 1)
+        unreal.EditorAssetLibrary.make_directory(package)
+        asset = unreal.AssetToolsHelpers.get_asset_tools().duplicate_asset(name, package, require_asset(source_path))
+        if not asset:
+            raise RuntimeError("无法复制战斗资产：" + path)
+    return asset, unreal.EditorAssetLibrary.get_metadata_tag(asset, COMBAT_TAG) != COMBAT_VERSION
+
+
+# 单独记录战斗迁移版本，避免重跑基础生成时覆盖已有角色和地图。
+def save_combat(asset, blueprint=False):
+    unreal.EditorAssetLibrary.set_metadata_tag(asset, COMBAT_TAG, COMBAT_VERSION)
+    save(asset, blueprint)
+
+
+# 按反射结构解析能力输入和能力集条目，避免依赖只读 Python 属性。
+def import_struct(cls, text):
+    result = cls()
+    if not result.import_text(text):
+        raise RuntimeError("无法解析战斗配置：" + text)
+    return result
+
+
+# 在原输入配置上增量添加轻攻击，保留所有既有原生动作和用户映射。
+def migrate_combat_input(config):
+    action, pending = duplicate_combat_asset(ROOT + "/Input/Actions/IA_Souls_LightAttack", "/Game/Input/Actions/IA_Weapon_Fire")
+    if pending:
+        action.set_editor_property("value_type", unreal.InputActionValueType.BOOLEAN)
+        action.set_editor_property("triggers", [])
+        action.set_editor_property("modifiers", [])
+        save_combat(action)
+    if unreal.EditorAssetLibrary.get_metadata_tag(config, COMBAT_TAG) == COMBAT_VERSION:
+        return
+    entries = list(config.get_editor_property("ability_input_actions"))
+    tag = '(TagName="InputTag.Souls.LightAttack")'
+    if not any("InputTag.Souls.LightAttack" in entry.get_editor_property("input_tag").export_text() for entry in entries):
+        entries.append(import_struct(unreal.LyraInputAction,
+            '(InputAction="{}",InputTag={})'.format(action.get_path_name(), tag)))
+        config.set_editor_property("ability_input_actions", entries)
+    mapping = config.get_editor_property("mapping_context")
+    changed = False
+    for name in ("LeftMouseButton", "Gamepad_RightShoulder"):
+        if not any(entry.get_editor_property("action") == action and
+                   entry.get_editor_property("key").export_text() == name
+                   for entry in mapping.get_editor_property("mappings")):
+            key = import_struct(unreal.Key, name)
+            mapping.map_key(action, key)
+            changed = True
+    if changed:
+        save_combat(mapping)
+    save_combat(config)
+
+
+# 配置新的战斗能力蓝图，只在首次迁移写入动作引用。
+def create_combat_ability(name, parent, properties):
+    blueprint, _ = create_blueprint(ROOT + "/Combat/Abilities/" + name,
+        require_class("/Script/SoulsCoreRuntime." + parent))
+    if unreal.EditorAssetLibrary.get_metadata_tag(blueprint, COMBAT_TAG) != COMBAT_VERSION:
+        cdo = unreal.get_default_object(blueprint_class(blueprint))
+        for key, value in properties.items():
+            cdo.set_editor_property(key, value)
+        save_combat(blueprint, True)
+    return blueprint_class(blueprint)
+
+
+# 合并能力和属性初始化，不清除用户追加的能力、效果或属性集。
+def migrate_combat_ability_set(abilities, attack_class, hit_class, death_class, init_class):
+    if unreal.EditorAssetLibrary.get_metadata_tag(abilities, COMBAT_TAG) == COMBAT_VERSION:
+        return
+    entries = []
+    old_death = "/Game/Characters/Heroes/Abilities/GA_Hero_Death.GA_Hero_Death_C"
+    for entry in abilities.get_editor_property("granted_gameplay_abilities"):
+        ability = entry.get_editor_property("ability")
+        if not ability or ability.get_path_name() != old_death:
+            entries.append(entry)
+    for ability, input_tag in ((attack_class, "InputTag.Souls.LightAttack"), (hit_class, ""), (death_class, "")):
+        if not any(entry.get_editor_property("ability") == ability for entry in entries):
+            entries.append(import_struct(unreal.LyraAbilitySet_GameplayAbility,
+                '(Ability="{}",AbilityLevel=1,InputTag=(TagName="{}"))'.format(ability.get_path_name(), input_tag)))
+    abilities.set_editor_property("granted_gameplay_abilities", entries)
+    attributes = list(abilities.get_editor_property("granted_attributes"))
+    combat_set = require_class("/Script/LyraGame.LyraCombatSet")
+    if not any(entry.get_editor_property("attribute_set") == combat_set for entry in attributes):
+        attributes.append(import_struct(unreal.LyraAbilitySet_AttributeSet,
+            '(AttributeSet="{}")'.format(combat_set.get_path_name())))
+        abilities.set_editor_property("granted_attributes", attributes)
+    effects = list(abilities.get_editor_property("granted_gameplay_effects"))
+    if not any(entry.get_editor_property("gameplay_effect") == init_class for entry in effects):
+        effects.append(import_struct(unreal.LyraAbilitySet_GameplayEffect,
+            '(GameplayEffect="{}",EffectLevel=1)'.format(init_class.get_path_name())))
+        abilities.set_editor_property("granted_gameplay_effects", effects)
+    save_combat(abilities)
+
+
+# 在原关卡中增量布置骨骼敌人和遮挡验证区，不清理任何已有场景对象。
+def migrate_combat_map(dummy_class):
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    if not levels.load_level(MAP_PATH):
+        raise RuntimeError("无法加载战斗测试关卡")
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+    if unreal.EditorAssetLibrary.get_metadata_tag(world, COMBAT_TAG) == COMBAT_VERSION:
+        return
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    labels = {actor.get_actor_label() for actor in actors.get_all_level_actors()}
+    for name, position in (("Souls_CombatDummy_1", (150, 1000, 100)),
+                           ("Souls_CombatDummy_2", (350, 1000, 100)),
+                           ("Souls_CombatDummy_BehindWall", (350, 1360, 100))):
+        if name not in labels:
+            dummy = actors.spawn_actor_from_class(dummy_class, unreal.Vector(*position), unreal.Rotator(0, 180, 0))
+            dummy.set_actor_label(name)
+    if "Souls_MeleeOcclusionWall" not in labels:
+        wall = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(350, 1280, 100))
+        wall.set_actor_label("Souls_MeleeOcclusionWall")
+        wall.static_mesh_component.set_static_mesh(require_asset("/Engine/BasicShapes/Cube"))
+        wall.static_mesh_component.set_collision_profile_name("BlockAll")
+        wall.set_actor_scale3d(unreal.Vector(4, 0.25, 2))
+    unreal.EditorAssetLibrary.set_metadata_tag(world, COMBAT_TAG, COMBAT_VERSION)
+    if not levels.save_current_level():
+        raise RuntimeError("无法保存战斗地图迁移")
+
+
+# 创建近战资产并显式迁移已有角色、输入和能力集，重复执行时保留用户改动。
+def create_combat_content(config, hero, abilities):
+    sequence, sequence_pending = duplicate_combat_asset(ROOT + "/Combat/Animations/AS_Souls_LightAttack",
+        "/Game/Characters/Heroes/Mannequin/Animations/Actions/MM_Rifle_Melee")
+    montage, montage_pending = duplicate_combat_asset(ROOT + "/Combat/Animations/AM_Souls_LightAttack",
+        "/Game/Characters/Heroes/Mannequin/Animations/Actions/AM_MM_Rifle_Melee")
+    if sequence_pending or montage_pending:
+        if not unreal.SoulsCombatEditorLibrary.configure_attack_montage(montage, sequence):
+            raise RuntimeError("无法配置近战动画窗口")
+        save_combat(sequence)
+        save_combat(montage)
+    damage, _ = create_blueprint(ROOT + "/Combat/Effects/GE_Souls_MeleeDamage", require_class("/Script/GameplayAbilities.GameplayEffect"))
+    init, _ = create_blueprint(ROOT + "/Combat/Effects/GE_Souls_CombatInit", require_class("/Script/GameplayAbilities.GameplayEffect"))
+    for blueprint, is_damage in ((damage, True), (init, False)):
+        if unreal.EditorAssetLibrary.get_metadata_tag(blueprint, COMBAT_TAG) != COMBAT_VERSION:
+            if not unreal.SoulsCombatEditorLibrary.configure_combat_effect(blueprint, is_damage, 25.0):
+                raise RuntimeError("无法配置战斗效果：" + blueprint.get_path_name())
+            save_combat(blueprint, True)
+    definition, _ = create_asset(ROOT + "/Combat/DA_Souls_LightAttack", require_class("/Script/SoulsCoreRuntime.SoulsAttackDefinition"))
+    if unreal.EditorAssetLibrary.get_metadata_tag(definition, COMBAT_TAG) != COMBAT_VERSION:
+        definition.set_editor_property("attack_montage", montage)
+        definition.set_editor_property("damage_effect_class", blueprint_class(damage))
+        save_combat(definition)
+    weapon, _ = create_blueprint(ROOT + "/Combat/Weapons/B_SoulsWeapon_TestSword", require_class("/Script/SoulsCoreRuntime.SoulsMeleeWeapon"))
+    if unreal.EditorAssetLibrary.get_metadata_tag(weapon, COMBAT_TAG) != COMBAT_VERSION:
+        save_combat(weapon, True)
+    attack_class = create_combat_ability("GA_Souls_LightAttack", "SoulsGameplayAbility_LightAttack", {})
+    hit_class = create_combat_ability("GA_Souls_HitReact", "SoulsGameplayAbility_HitReact", {
+        "front_montage": require_asset("/Game/Characters/Heroes/Mannequin/Animations/Actions/AM_MM_HitReact_Front_Lgt_01"),
+        "back_montage": require_asset("/Game/Characters/Heroes/Mannequin/Animations/Actions/AM_MM_HitReact_Back_Lgt_01"),
+        "left_montage": require_asset("/Game/Characters/Heroes/Mannequin/Animations/Actions/AM_MM_HitReact_Left_Lgt_01"),
+        "right_montage": require_asset("/Game/Characters/Heroes/Mannequin/Animations/Actions/AM_MM_HitReact_Right_Lgt_01")})
+    death_class = create_combat_ability("GA_Souls_Death", "SoulsGameplayAbility_Death", {
+        "death_montage": require_asset("/Game/Characters/Heroes/Mannequin/Animations/Actions/AM_MM_Death_Front_01")})
+    migrate_combat_input(config)
+    migrate_combat_ability_set(abilities, attack_class, hit_class, death_class, blueprint_class(init))
+    if unreal.EditorAssetLibrary.get_metadata_tag(hero, COMBAT_TAG) != COMBAT_VERSION:
+        cdo = unreal.get_default_object(blueprint_class(hero))
+        trace = cdo.get_component_by_class(unreal.SoulsMeleeTraceComponent)
+        if not trace:
+            raise RuntimeError("Souls 角色缺少武器轨迹组件")
+        if not trace.get_editor_property("default_attack_definition"):
+            trace.set_editor_property("default_attack_definition", definition)
+        trace.set_editor_property("weapon_class", blueprint_class(weapon))
+        save_combat(hero, True)
+    dummy, _ = create_blueprint(ROOT + "/Development/B_SoulsCombatDummy", require_class("/Script/SoulsCoreRuntime.SoulsCombatDummy"))
+    if unreal.EditorAssetLibrary.get_metadata_tag(dummy, COMBAT_TAG) != COMBAT_VERSION:
+        cdo = unreal.get_default_object(blueprint_class(dummy))
+        cdo.set_editor_property("combat_abilities", [hit_class, death_class])
+        cdo.set_editor_property("team_id", 2)
+        cdo.set_editor_property("initial_health", 100.0)
+        mesh = cdo.get_editor_property("mesh")
+        mesh.set_skeletal_mesh_asset(require_asset("/Game/Characters/Heroes/Mannequin/Meshes/SKM_Manny"))
+        mesh.set_relative_location(unreal.Vector(0, 0, -90), False, False)
+        mesh.set_relative_rotation(unreal.Rotator(0, -90, 0), False, False)
+        mesh.set_anim_instance_class(require_class("/Game/Characters/Heroes/Mannequin/Animations/ABP_Mannequin_Base.ABP_Mannequin_Base_C"))
+        cdo.set_editor_property("unarmed_animation_layer", require_class(
+            "/Game/Characters/Heroes/Mannequin/Animations/Locomotion/Unarmed/ABP_UnarmedAnimLayers.ABP_UnarmedAnimLayers_C"))
+        save_combat(dummy, True)
+    migrate_combat_map(blueprint_class(dummy))
+    unreal.log("SOULS_COMBAT_SETUP_COMPLETE: " + MAP_PATH)
+
+
 # 按依赖顺序创建并连接插件入口、角色、相机、HUD、Experience 和地图。
 def main():
     unreal.load_module("SoulsCoreRuntime")
@@ -259,6 +449,7 @@ def main():
     if pending:
         save(target, True)
     create_test_map(blueprint_class(experience), blueprint_class(target))
+    create_combat_content(config, hero, abilities)
     unreal.log("SOULS_SETUP_COMPLETE: " + MAP_PATH)
 
 
