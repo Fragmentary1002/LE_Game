@@ -4,6 +4,7 @@
 #include "Character/LyraPawnData.h"
 #include "Character/LyraPawnExtensionComponent.h"
 #include "Character/SoulsPawnData.h"
+#include "Combat/SoulsMeleeTraceComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
@@ -149,6 +150,12 @@ void USoulsHeroComponent::Input_SwitchTarget(const FInputActionValue& Value)
 // 锁定时使用控制器平滑转向，解除后恢复朝移动方向转向。
 void USoulsHeroComponent::HandleTargetChanged(AActor* TargetActor)
 {
+    const USoulsMeleeTraceComponent* Trace = GetOwner()->FindComponentByClass<USoulsMeleeTraceComponent>();
+    if (Trace && Trace->IsAttackActive())
+    {
+        bStickSwitchArmed = true;
+        return;
+    }
     if (ACharacter* Character = GetPawn<ACharacter>())
     {
         Character->bUseControllerRotationYaw = false;
