@@ -2,13 +2,17 @@
 
 #include "AbilitySystem/Attributes/LyraHealthSet.h"
 #include "AbilitySystemComponent.h"
+#include "Animation/AnimMontage.h"
 #include "Character/LyraHealthComponent.h"
 #include "Character/LyraPawnData.h"
+#include "Combat/Actions/SoulsCombatActionComponent.h"
+#include "Enemies/Spawning/SoulsEnemySpawnPoint.h"
 #include "Player/SoulsCharacter.h"
 #include "Progression/Checkpoints/SoulsBonfire.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/Pawn.h"
 #include "GameModes/SoulsGameState.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -28,8 +32,33 @@ DEFINE_LOG_CATEGORY_STATIC(LogSoulsGameMode, Log, All);
 namespace
 {
     const FName DefaultStartTag(TEXT("SoulsDefaultStart"));
+    const FName RouteBossTag(TEXT("Souls.Route.Boss"));
+    const FName ShortcutGateTag(TEXT("Souls.Route.ShortcutGate"));
+    const FName ShortcutTriggerTag(TEXT("Souls.Route.ShortcutTrigger"));
+    const FName ExitGateTag(TEXT("Souls.Route.ExitGate"));
+    const FName VictoryTag(TEXT("Souls.Route.Victory"));
     constexpr int32 MaxRestartAttempts = 40;
     constexpr float RestartInterval = 0.25f;
+    constexpr int32 RouteHealingCapacity = 2;
+    constexpr float RouteHealWindup = 0.8f;
+    constexpr float RouteHealFraction = 0.45f;
+
+    // 隐藏挡路的门，并解除玩家碰撞。
+    void OpenRouteGate(AActor& Gate)
+    {
+        Gate.SetActorHiddenInGame(true);
+        Gate.SetActorEnableCollision(false);
+    }
+
+    // 回复只允许在攻击、受击和翻滚之外结算。
+    bool CanHealOnRoute(const APawn& Pawn, const UAbilitySystemComponent& ASC, const ULyraHealthComponent& Health)
+    {
+        const USoulsCombatActionComponent* Combat = Pawn.FindComponentByClass<USoulsCombatActionComponent>();
+        return ASC.GetAvatarActor() == &Pawn && Combat && !Combat->IsRolling() && !Health.IsDeadOrDying() &&
+            Health.GetHealth() > 0.0f && Health.GetHealth() < Health.GetMaxHealth() &&
+            !ASC.HasMatchingGameplayTag(FGameplayTag::RequestGameplayTag(TEXT("State.Souls.Attacking"))) &&
+            !ASC.HasMatchingGameplayTag(FGameplayTag::RequestGameplayTag(TEXT("State.Souls.HitReact")));
+    }
 
     // 在不溢出的情况下发放非负魂奖励。
     int64 AddSouls(int64 Wallet, int64 Amount)
@@ -163,6 +192,7 @@ void ASoulsGameMode::TryPlayerRestart()
         Encounters->OnEnemyDefeated.AddUObject(this, &ThisClass::HandleEnemyDefeated);
         Encounters->ApplyReset(Progress->GetProgress().PermanentKills);
         bWorldReady = true;
+        InitializeLevelRoute();
         SyncSoulDrop();
     }
 
@@ -175,6 +205,7 @@ void ASoulsGameMode::TryPlayerRestart()
     }
     if (Player->GetPawn() && Player->GetPawn() != LastRecordedDeathPawn.Get())
     {
+        ResetRouteHealing();
         if (bResetEncountersAfterDeath)
         {
             GetWorld()->GetSubsystem<USoulsEncounterSubsystem>()->ApplyReset(GetProgressSubsystem()->GetProgress().PermanentKills);
@@ -182,6 +213,70 @@ void ASoulsGameMode::TryPlayerRestart()
         }
         PendingRestartPlayer.Reset();
         GetWorldTimerManager().ClearTimer(RestartTimer);
+    }
+}
+
+// 读取关卡内的路线标记，并在读档后同步终点状态。
+void ASoulsGameMode::InitializeLevelRoute()
+{
+    for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+    {
+        if (It->ActorHasTag(ShortcutGateTag))
+        {
+            ShortcutGate = *It;
+        }
+        if (It->ActorHasTag(ShortcutTriggerTag))
+        {
+            It->OnActorBeginOverlap.AddUniqueDynamic(this, &ThisClass::HandleShortcutOverlap);
+        }
+        if (const ASoulsEnemySpawnPoint* Anchor = Cast<ASoulsEnemySpawnPoint>(*It);
+            Anchor && Anchor->IsPermanentOnKill() && Anchor->ActorHasTag(RouteBossTag))
+        {
+            RouteBossId = Anchor->GetSpawnId();
+        }
+    }
+    if (HasLevelRoute())
+    {
+        RouteDodgeMontage = LoadObject<UAnimMontage>(nullptr,
+            TEXT("/Game/Characters/Heroes/Mannequin/Animations/Actions/AM_MM_Dash_Forward.AM_MM_Dash_Forward"));
+    }
+    SyncLevelExit();
+}
+
+// 只接受当前存活玩家从捷径内侧触发，开门后本次关卡内一直可通行。
+void ASoulsGameMode::HandleShortcutOverlap(AActor* Trigger, AActor* OtherActor)
+{
+    APawn* Pawn = Cast<APawn>(OtherActor);
+    APlayerController* Player = Pawn ? Pawn->GetController<APlayerController>() : nullptr;
+    const ULyraHealthComponent* Health = Pawn ? ULyraHealthComponent::FindHealthComponent(Pawn) : nullptr;
+    if (AActor* Gate = ShortcutGate.Get();
+        Gate && IsLocalSoulsPlayer(Player) && Health && !Health->IsDeadOrDying() && Health->GetHealth() > 0.0f)
+    {
+        OpenRouteGate(*Gate);
+        ShortcutGate.Reset();
+        Trigger->OnActorBeginOverlap.RemoveDynamic(this, &ThisClass::HandleShortcutOverlap);
+    }
+}
+
+// 当 Boss 击杀已提交至存档时开放终点，也覆盖读到已通关的存档。
+void ASoulsGameMode::SyncLevelExit()
+{
+    if (bRouteExitOpen || !RouteBossId.IsValid() ||
+        !GetProgressSubsystem()->GetProgress().PermanentKills.Contains(RouteBossId))
+    {
+        return;
+    }
+    bRouteExitOpen = true;
+    for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+    {
+        if (It->ActorHasTag(ExitGateTag))
+        {
+            OpenRouteGate(**It);
+        }
+        if (It->ActorHasTag(VictoryTag))
+        {
+            It->SetActorHiddenInGame(false);
+        }
     }
 }
 
@@ -217,8 +312,52 @@ bool ASoulsGameMode::RequestBonfire(APlayerController* Player, const ASoulsBonfi
     {
         ASC->SetNumericAttributeBase(ULyraHealthSet::GetHealthAttribute(), Health->GetMaxHealth());
         GetWorld()->GetSubsystem<USoulsEncounterSubsystem>()->ApplyReset(Snapshot.PermanentKills);
+        ResetRouteHealing();
     }
     return true;
+}
+
+// 使用键按下时记录生命和角色，供回复完成时复核。
+void ASoulsGameMode::RequestRouteHeal(APlayerController* Player)
+{
+    if (RouteHealingUses <= 0 || !IsLocalSoulsPlayer(Player) || GetWorldTimerManager().IsTimerActive(RouteHealTimer))
+    {
+        return;
+    }
+    ASoulsCharacter* Pawn = Cast<ASoulsCharacter>(Player->GetPawn());
+    const ULyraHealthComponent* Health = ULyraHealthComponent::FindHealthComponent(Pawn);
+    const UAbilitySystemComponent* ASC = Pawn ? Pawn->GetAbilitySystemComponent() : nullptr;
+    if (ASC && Health && CanHealOnRoute(*Pawn, *ASC, *Health))
+    {
+        GetWorldTimerManager().SetTimer(RouteHealTimer, FTimerDelegate::CreateUObject(this, &ThisClass::FinishRouteHeal,
+            TWeakObjectPtr<APawn>(Pawn), Health->GetHealth()), RouteHealWindup, false);
+    }
+}
+
+// 前摇期间受伤或更换角色时取消，成功补血后扣除一次次数。
+void ASoulsGameMode::FinishRouteHeal(TWeakObjectPtr<APawn> StartingPawn, float StartingHealth)
+{
+    const ASoulsCharacter* Pawn = Cast<ASoulsCharacter>(StartingPawn.Get());
+    const APlayerController* Player = GetWorld()->GetFirstPlayerController();
+    const ULyraHealthComponent* Health = ULyraHealthComponent::FindHealthComponent(Pawn);
+    UAbilitySystemComponent* ASC = Pawn ? Pawn->GetAbilitySystemComponent() : nullptr;
+    if (RouteHealingUses > 0 && IsLocalSoulsPlayer(Player) && Player->GetPawn() == Pawn && ASC && Health &&
+        Health->GetHealth() == StartingHealth && CanHealOnRoute(*Pawn, *ASC, *Health))
+    {
+        const float NewHealth = FMath::Min(Health->GetMaxHealth(), StartingHealth + Health->GetMaxHealth() * RouteHealFraction);
+        ASC->SetNumericAttributeBase(ULyraHealthSet::GetHealthAttribute(), NewHealth);
+        --RouteHealingUses;
+    }
+}
+
+// 清除旧的用药回调，并按关卡配置恢复次数。
+void ASoulsGameMode::ResetRouteHealing()
+{
+    if (HasLevelRoute())
+    {
+        GetWorldTimerManager().ClearTimer(RouteHealTimer);
+        RouteHealingUses = RouteHealingCapacity;
+    }
 }
 
 // 优先回收附近的掉魂，之后尝试最近且可用的篝火。
@@ -233,7 +372,14 @@ bool ASoulsGameMode::RequestInteraction(APlayerController* Player)
     {
         return TryRecoverSoulDrop(*Player);
     }
-    ASoulsBonfire* Nearest = nullptr;
+    const ASoulsBonfire* Nearest = FindUsableBonfire(Pawn);
+    return Nearest && RequestBonfire(Player, Nearest);
+}
+
+// 在交互范围和视线校验通过的篝火中选择距离最近的一座。
+const ASoulsBonfire* ASoulsGameMode::FindUsableBonfire(const APawn& Pawn) const
+{
+    const ASoulsBonfire* Nearest = nullptr;
     double NearestDistance = TNumericLimits<double>::Max();
     for (TActorIterator<ASoulsBonfire> It(GetWorld()); It; ++It)
     {
@@ -244,7 +390,36 @@ bool ASoulsGameMode::RequestInteraction(APlayerController* Player)
             NearestDistance = Distance;
         }
     }
-    return Nearest && RequestBonfire(Player, Nearest);
+    return Nearest;
+}
+
+// 让提示的目标顺序与 E 键执行的交互一致。
+FText ASoulsGameMode::GetRouteInteractionHint(const APlayerController* Player) const
+{
+    const APawn* Pawn = Player ? Player->GetPawn() : nullptr;
+    const ULyraHealthComponent* Health = ULyraHealthComponent::FindHealthComponent(Pawn);
+    if (!bWorldReady || PendingCombatProgress.IsSet() || !IsLocalSoulsPlayer(Player) ||
+        !Health || Health->IsDeadOrDying())
+    {
+        return FText::GetEmpty();
+    }
+    if (ActiveDrop.IsValid() && ActiveDrop->CanUseBy(*Pawn))
+    {
+        return NSLOCTEXT("Souls", "RouteRecover", "E  回收掉落的魂");
+    }
+    if (GetWorldTimerManager().IsTimerActive(RouteHealTimer))
+    {
+        return NSLOCTEXT("Souls", "RouteHealing", "正在回复生命…");
+    }
+    if (const ASoulsBonfire* Bonfire = FindUsableBonfire(*Pawn))
+    {
+        if (GetProgressSubsystem()->GetProgress().UnlockedBonfires.Contains(Bonfire->GetBonfireId()))
+        {
+            return NSLOCTEXT("Souls", "RouteRest", "E  在篝火休息");
+        }
+        return NSLOCTEXT("Souls", "RouteLightBonfire", "E  点亮篝火");
+    }
+    return FText::GetEmpty();
 }
 
 // 同一 Pawn 仅记一次死亡，即使钱包为空也替换上次掉魂。
@@ -305,6 +480,7 @@ void ASoulsGameMode::FlushCombatProgress()
         PendingCombatProgress.Reset();
         GetWorldTimerManager().ClearTimer(SaveRetryTimer);
         SyncSoulDrop();
+        SyncLevelExit();
         if (bWasRetrying)
         {
             APlayerController* Player = GetWorld()->GetFirstPlayerController();

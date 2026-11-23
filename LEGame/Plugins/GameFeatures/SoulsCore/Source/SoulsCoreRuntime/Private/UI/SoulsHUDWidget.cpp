@@ -1,16 +1,21 @@
 #include "UI/SoulsHUDWidget.h"
 
+#include "AbilitySystemComponent.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "Blueprint/WidgetTree.h"
 #include "Character/LyraHealthComponent.h"
+#include "Combat/Actions/SoulsStaminaSet.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
+#include "Engine/World.h"
+#include "GameModes/SoulsGameMode.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
 #include "Input/CommonUIInputTypes.h"
 #include "Input/UIActionBindingHandle.h"
+#include "Player/SoulsCharacter.h"
 #include "Rendering/DrawElements.h"
 #include "Targeting/SoulsLockOnComponent.h"
 #include "Targeting/SoulsTargetComponent.h"
@@ -84,6 +89,79 @@ void USoulsHUDWidget::NativeConstruct()
         PC->OnPossessedPawnChanged.AddUniqueDynamic(this, &ThisClass::HandlePawnChanged);
         HandlePawnChanged(nullptr, PC->GetPawn());
     }
+}
+
+// 首次进入白盒时创建控件，之后按固定间隔读取当前角色和进度。
+void USoulsHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+    Super::NativeTick(MyGeometry, InDeltaTime);
+    RouteRefreshTime -= InDeltaTime;
+    if (RouteRefreshTime > 0.0f)
+    {
+        return;
+    }
+    RouteRefreshTime = 0.1f;
+
+    const UWorld* World = GetWorld();
+    const ASoulsGameMode* Mode = World ? World->GetAuthGameMode<ASoulsGameMode>() : nullptr;
+    if (!Mode || !Mode->HasLevelRoute())
+    {
+        return;
+    }
+    if (!RouteStaminaBar)
+    {
+        UCanvasPanel* Root = Cast<UCanvasPanel>(WidgetTree->RootWidget);
+        if (!Root)
+        {
+            return;
+        }
+        BuildRouteWidgets(*Root);
+    }
+
+    const APlayerController* Player = GetOwningPlayer();
+    const ASoulsCharacter* Pawn = Player ? Cast<ASoulsCharacter>(Player->GetPawn()) : nullptr;
+    const UAbilitySystemComponent* ASC = Pawn ? Pawn->GetAbilitySystemComponent() : nullptr;
+    const USoulsStaminaSet* Stamina = ASC ? ASC->GetSet<USoulsStaminaSet>() : nullptr;
+    RouteStaminaBar->SetVisibility(Stamina ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+    if (Stamina)
+    {
+        RouteStaminaBar->SetPercent(Stamina->GetStamina() / FMath::Max(Stamina->GetMaxStamina(), 1.0f));
+    }
+    const int64 WalletSouls = Mode->GetWalletSouls();
+    const int32 HealingUses = Mode->GetRouteHealingUses();
+    if (DisplayedWalletSouls != WalletSouls || DisplayedHealingUses != HealingUses)
+    {
+        DisplayedWalletSouls = WalletSouls;
+        DisplayedHealingUses = HealingUses;
+        RouteWalletText->SetText(FText::Format(NSLOCTEXT("Souls", "RouteWallet", "持有魂 {0}   |   R  回复 {1}/2"),
+            FText::AsNumber(WalletSouls), FText::AsNumber(HealingUses)));
+    }
+    const FText Hint = Mode->GetRouteInteractionHint(Player);
+    if (!RouteInteractionText->GetText().EqualTo(Hint))
+    {
+        RouteInteractionText->SetText(Hint);
+    }
+}
+
+// 将白盒信息放在玩家生命条下方，兼容已有 HUD 蓝图。
+void USoulsHUDWidget::BuildRouteWidgets(UCanvasPanel& Root)
+{
+    RouteStaminaBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), TEXT("RouteStaminaBar"));
+    RouteStaminaBar->SetFillColorAndOpacity(FLinearColor(0.19f, 0.68f, 0.25f));
+    UCanvasPanelSlot* StaminaSlot = Root.AddChildToCanvas(RouteStaminaBar);
+    StaminaSlot->SetPosition(FVector2D(48, 96));
+    StaminaSlot->SetSize(FVector2D(340, 12));
+
+    RouteWalletText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("RouteWalletText"));
+    UCanvasPanelSlot* WalletSlot = Root.AddChildToCanvas(RouteWalletText);
+    WalletSlot->SetPosition(FVector2D(48, 116));
+    WalletSlot->SetAutoSize(true);
+
+    RouteInteractionText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("RouteInteractionText"));
+    UCanvasPanelSlot* InteractionSlot = Root.AddChildToCanvas(RouteInteractionText);
+    InteractionSlot->SetAnchors(FAnchors(0.5f, 0.72f));
+    InteractionSlot->SetAlignment(FVector2D(0.5f, 0.0f));
+    InteractionSlot->SetAutoSize(true);
 }
 
 // 角色更换时释放旧绑定，并订阅新角色的生命及锁定事件。

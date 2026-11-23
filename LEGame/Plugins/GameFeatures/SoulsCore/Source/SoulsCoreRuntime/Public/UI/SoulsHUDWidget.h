@@ -5,6 +5,7 @@
 #include "SoulsHUDWidget.generated.h"
 
 class APawn;
+class UCanvasPanel;
 class ULyraHealthComponent;
 class USoulsLockOnComponent;
 class UProgressBar;
@@ -27,6 +28,8 @@ protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
     // 绑定玩家切换及当前角色数据。
     virtual void NativeConstruct() override;
+    // 定时刷新白盒 HUD 的精力、魂数和交互提示。
+    virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
     // 对称释放生命值和控制器事件。
     virtual void NativeDestruct() override;
     // 将当前锁定点投影到 HUD，绘制目标标记。
@@ -55,6 +58,8 @@ private:
     void UnbindPawn();
     // 解绑当前目标生命事件。
     void UnbindTarget();
+    // 创建白盒关卡所需的附加 HUD 控件。
+    void BuildRouteWidgets(UCanvasPanel& Root);
 
     UPROPERTY(Transient, meta = (BindWidgetOptional))
     TObjectPtr<UProgressBar> PlayerHealthBar;
@@ -64,6 +69,15 @@ private:
     TObjectPtr<UProgressBar> TargetHealthBar;
     UPROPERTY(Transient, meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TargetText;
+    UPROPERTY(Transient)
+    TObjectPtr<UProgressBar> RouteStaminaBar;
+    UPROPERTY(Transient)
+    TObjectPtr<UTextBlock> RouteWalletText;
+    UPROPERTY(Transient)
+    TObjectPtr<UTextBlock> RouteInteractionText;
+    float RouteRefreshTime = 0.0f;
+    int64 DisplayedWalletSouls = -1;
+    int32 DisplayedHealingUses = -1;
     TWeakObjectPtr<ULyraHealthComponent> PlayerHealth;
     TWeakObjectPtr<ULyraHealthComponent> TargetHealth;
     TWeakObjectPtr<USoulsLockOnComponent> LockOn;

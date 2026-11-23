@@ -111,6 +111,10 @@ void ASoulsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 {
     Super::SetupPlayerInputComponent(PlayerInputComponent);
     PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &ThisClass::InputInteract);
+    if (const ASoulsGameMode* Mode = GetWorld()->GetAuthGameMode<ASoulsGameMode>(); Mode && Mode->HasLevelRoute())
+    {
+        PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this, &ThisClass::InputRouteHeal);
+    }
 }
 
 // 让权威 GameMode 统一选择并校验可交互目标。
@@ -119,5 +123,14 @@ void ASoulsCharacter::InputInteract()
     if (ASoulsGameMode* GameMode = GetWorld()->GetAuthGameMode<ASoulsGameMode>())
     {
         GameMode->RequestInteraction(GetController<APlayerController>());
+    }
+}
+
+// 由当前权威玩法模式判断回复能否开始。
+void ASoulsCharacter::InputRouteHeal()
+{
+    if (ASoulsGameMode* Mode = GetWorld()->GetAuthGameMode<ASoulsGameMode>())
+    {
+        Mode->RequestRouteHeal(GetController<APlayerController>());
     }
 }

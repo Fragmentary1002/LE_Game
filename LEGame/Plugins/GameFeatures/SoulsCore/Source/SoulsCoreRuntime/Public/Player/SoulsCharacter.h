@@ -54,6 +54,9 @@ private:
     // 将交互键传给当前单机玩法模式。
     void InputInteract();
 
+    // 将白盒回复按键传给当前单机玩法模式。
+    void InputRouteHeal();
+
     // 在权威玩家的移动更新结束后记录最近的可行走地面位置。
     UFUNCTION()
     void UpdateSafeGroundLocation(float DeltaSeconds, FVector OldLocation, FVector OldVelocity);

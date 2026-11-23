@@ -1,13 +1,17 @@
 #include "Combat/Actions/SoulsCombatActionComponent.h"
 
 #include "AbilitySystem/LyraAbilitySystemComponent.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
 #include "Character/LyraHealthComponent.h"
 #include "Character/LyraPawnExtensionComponent.h"
 #include "Combat/Actions/SoulsStaminaSet.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/RootMotionSource.h"
+#include "GameModes/SoulsGameMode.h"
 #include "GameplayEffectComponents/TargetTagsGameplayEffectComponent.h"
 #include "NativeGameplayTags.h"
 #include "Net/UnrealNetwork.h"
@@ -305,7 +309,24 @@ void USoulsCombatActionComponent::StartRoll(const FVector& Direction)
     Motion->FinishVelocityParams.Mode = ERootMotionFinishVelocityMode::SetVelocity;
     Motion->FinishVelocityParams.SetVelocity = FVector::ZeroVector;
     RollMotionId = Movement->ApplyRootMotionSource(Motion);
+    PlayRouteRollMontage(*Character);
     Character->ForceNetUpdate();
+}
+
+// 闪避动作只负责表现，实际位移仍由当前 Root Motion Source 驱动。
+void USoulsCombatActionComponent::PlayRouteRollMontage(ACharacter& Character)
+{
+    const ASoulsGameMode* Mode = GetWorld()->GetAuthGameMode<ASoulsGameMode>();
+    UAnimMontage* Montage = Mode ? Mode->GetRouteDodgeMontage() : nullptr;
+    UAnimInstance* Anim = Character.GetMesh()->GetAnimInstance();
+    if (Montage && Anim && Anim->Montage_Play(Montage, Montage->GetPlayLength() / RollDuration) > 0.0f)
+    {
+        if (FAnimMontageInstance* Instance = Anim->GetActiveInstanceForMontage(Montage))
+        {
+            Instance->PushDisableRootMotion();
+        }
+        PlayingRollMontage = Montage;
+    }
 }
 
 // 按句柄移除本次翻滚授予的效果与位移源。
@@ -327,6 +348,10 @@ void USoulsCombatActionComponent::FinishRoll(bool bCancelled)
     }
     if (ACharacter* Character = GetPawn<ACharacter>())
     {
+        if (UAnimInstance* Anim = Character->GetMesh()->GetAnimInstance(); Anim && PlayingRollMontage.IsValid())
+        {
+            Anim->Montage_Stop(0.08f, PlayingRollMontage.Get());
+        }
         UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
         Movement->MaxWalkSpeed = PreRollMaxWalkSpeed;
         if (RollMotionId != 0)
@@ -337,6 +362,7 @@ void USoulsCombatActionComponent::FinishRoll(bool bCancelled)
         OnRep_Rolling();
         Character->ForceNetUpdate();
     }
+    PlayingRollMontage.Reset();
     if (!bCancelled)
     {
         ScheduleDrain(0, true);

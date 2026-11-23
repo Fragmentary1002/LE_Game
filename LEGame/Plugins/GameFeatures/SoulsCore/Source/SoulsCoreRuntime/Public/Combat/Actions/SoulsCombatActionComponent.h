@@ -7,7 +7,9 @@
 #include "GameplayEffect.h"
 #include "SoulsCombatActionComponent.generated.h"
 
+class ACharacter;
 class UAbilitySystemComponent;
+class UAnimMontage;
 
 UENUM()
 enum class ESoulsCombatInput : uint8
@@ -110,11 +112,15 @@ private:
     // 释放位移与免疫资源，并根据结束结果决定是否接续。
     void FinishRoll(bool bCancelled);
 
+    // 在白盒中播放与当前闪避时长匹配的占位动作。
+    void PlayRouteRollMontage(ACharacter& Character);
+
     // 在状态变化时接管转向，结束时按当前锁定目标恢复转向。
     UFUNCTION()
     void OnRep_Rolling();
 
     TWeakObjectPtr<UAbilitySystemComponent> BoundASC;
+    TWeakObjectPtr<UAnimMontage> PlayingRollMontage;
     TOptional<FBufferedInput> BufferedInput;
     FTimerHandle DrainTimer;
     FActiveGameplayEffectHandle ImmunityHandle;
