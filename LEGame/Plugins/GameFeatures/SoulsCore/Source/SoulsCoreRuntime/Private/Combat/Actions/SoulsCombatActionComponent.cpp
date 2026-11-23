@@ -26,14 +26,19 @@ namespace
     constexpr float RollCost = 25.0f;
     constexpr float RecoveryDelay = 0.8f;
     constexpr float RecoveryPerSecond = 20.0f;
-    constexpr float BufferSeconds = 0.18f;
+
     constexpr float RollDuration = 0.55f;
     constexpr float RollMovementDuration = 0.32f;
     constexpr float RollSpeed = 875.0f;
     constexpr float ImmunityStart = 0.08f;
     constexpr float ImmunityEnd = 0.30f;
 
-    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Event_LightAttack, "Event.Souls.LightAttack");
+    const FName IdleNode(TEXT("Idle"));
+    const FName LightOneNode(TEXT("Light1"));
+    const FName LightTwoNode(TEXT("Light2"));
+    const FName RollNode(TEXT("Roll"));
+
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Ability_Roll, "Ability.Souls.Roll");
 }
 
 // 用现有 Lyra 免疫标签处理正常伤害，效果独立过期。
@@ -56,6 +61,10 @@ USoulsCombatActionComponent::USoulsCombatActionComponent(const FObjectInitialize
     PrimaryComponentTick.bCanEverTick = true;
     PrimaryComponentTick.bStartWithTickEnabled = false;
     PrimaryComponentTick.TickGroup = TG_PrePhysics;
+    ComboDefinitions = TSoftObjectPtr<UDataTable>(FSoftObjectPath(
+        TEXT("/SoulsCore/Combat/Combos/DT_ComboDefinitions.DT_ComboDefinitions")));
+    AbilityRegistry = TSoftObjectPtr<UDataTable>(FSoftObjectPath(
+        TEXT("/SoulsCore/Combat/Combos/DT_AbilityRegistry.DT_AbilityRegistry")));
 }
 
 // 将翻滚控制状态同步到拥有者。
@@ -71,11 +80,34 @@ void USoulsCombatActionComponent::BeginPlay()
     Super::BeginPlay();
     if (GetOwner()->HasAuthority())
     {
+        LoadComboTables();
         if (ULyraPawnExtensionComponent* Extension = ULyraPawnExtensionComponent::FindPawnExtensionComponent(GetOwner()))
         {
             Extension->OnAbilitySystemUninitialized_Register(FSimpleMulticastDelegate::FDelegate::CreateUObject(this, &ThisClass::HandleAbilitySystemRemoved));
             Extension->OnAbilitySystemInitialized_RegisterAndCall(FSimpleMulticastDelegate::FDelegate::CreateUObject(this, &ThisClass::HandleAbilitySystemReady));
         }
+    }
+}
+
+// 在权威 Pawn 就绪时加载规则，行名为等优先级规则提供固定顺序。
+void USoulsCombatActionComponent::LoadComboTables()
+{
+    const UDataTable* Definitions = ComboDefinitions.LoadSynchronous();
+    const UDataTable* Registry = AbilityRegistry.LoadSynchronous();
+    if (!Definitions || Definitions->GetRowStruct() != FLECombatComboTransition::StaticStruct() ||
+        !Registry || Registry->GetRowStruct() != FLEAbilityRegistryRow::StaticStruct())
+    {
+        UE_LOG(LogTemp, Error, TEXT("Souls 连招表或技能注册表缺失，或者行类型不匹配。"));
+        return;
+    }
+
+    LoadedAbilityRegistry = Registry;
+    TArray<FName> RowNames = Definitions->GetRowNames();
+    RowNames.Sort(FNameLexicalLess());
+    ComboTransitions.Reserve(RowNames.Num());
+    for (const FName RowName : RowNames)
+    {
+        ComboTransitions.Add(*Definitions->FindRow<FLECombatComboTransition>(RowName, TEXT("Souls Combo")));
     }
 }
 
@@ -150,43 +182,82 @@ void USoulsCombatActionComponent::AcceptInput(ESoulsCombatInput Input, const FVe
     {
         return;
     }
-    const FBufferedInput Intent{Input, Direction, GetWorld()->GetTimeSeconds() + BufferSeconds};
+    const FGameplayTag IntentTag = FGameplayTag::RequestGameplayTag(Input == ESoulsCombatInput::Roll
+        ? TEXT("InputIntent.Souls.Roll") : TEXT("InputIntent.Souls.LightAttack"));
+    const FLECombatIntent Intent{IntentTag, Direction};
     if (ActiveLightStage != 0 || bRolling || DrainTimer.IsValid())
     {
-        BufferedInput = Intent;
+        Combo.Buffer(Intent, GetWorld()->GetTimeSeconds(), InputBufferSeconds);
+        BufferedComboWindows = OpenComboWindows;
     }
     else
     {
-        DispatchInput(Intent, 0, false);
+        DispatchInput(Intent, IdleNode, OpenComboWindows);
     }
 }
 
-// 由服务器按本次接续来源确定轻击段号或翻滚。
-void USoulsCombatActionComponent::DispatchInput(const FBufferedInput& Intent, int32 FinishedLightStage, bool bFinishedRoll)
+// 将通用规则选出的目标节点转换为 Souls 动作。
+void USoulsCombatActionComponent::DispatchInput(const FLECombatIntent& Intent, FName SourceNode,
+    const FGameplayTagContainer& Windows)
 {
-    if (Intent.Input == ESoulsCombatInput::Roll)
+    FGameplayTagContainer OwnedTags;
+    BoundASC->GetOwnedGameplayTags(OwnedTags);
+    const FLECombatComboTransition* Transition = FLECombatCombo::FindTransition(
+        ComboTransitions, SourceNode, Intent.Tag, Windows, OwnedTags);
+    if (!Transition || !LoadedAbilityRegistry)
     {
-        if (!bFinishedRoll)
+        return;
+    }
+
+    const FLEAbilityRegistryRow* Ability = LoadedAbilityRegistry->FindRow<FLEAbilityRegistryRow>(
+        Transition->TargetNode, TEXT("Souls Ability Registry"));
+    if (!Ability)
+    {
+        return;
+    }
+    if (!Ability->AbilityClass)
+    {
+        if (Ability->AbilityTag == TAG_Ability_Roll)
         {
             StartRoll(Intent.Direction);
         }
         return;
     }
-    if (FinishedLightStage != 2)
+
+    UAbilitySystemComponent* ASC = BoundASC.Get();
+    const FGameplayAbilitySpec* Spec = ASC->FindAbilitySpecFromClass(Ability->AbilityClass);
+    if (Spec)
     {
         FGameplayEventData Event;
-        Event.EventTag = TAG_Event_LightAttack;
+        Event.EventTag = Ability->ActivationEvent;
         Event.Instigator = GetOwner();
         Event.Target = GetOwner();
-        Event.EventMagnitude = FinishedLightStage == 1 ? 2.0f : 1.0f;
-        BoundASC->HandleGameplayEvent(Event.EventTag, &Event);
+        Event.EventMagnitude = Ability->EventMagnitude;
+        ASC->TriggerAbilityFromGameplayEvent(Spec->Handle, ASC->AbilityActorInfo.Get(), Event.EventTag, &Event, *ASC);
+    }
+}
+
+// 记录合法的开窗输入，使接续能在旧 GA 完成后安全启动。
+void USoulsCombatActionComponent::SetComboWindow(FGameplayTag Window, bool bOpen)
+{
+    if (bOpen)
+    {
+        OpenComboWindows.AddTag(Window);
+        if (Combo.HasBufferedInput())
+        {
+            BufferedComboWindows.AddTag(Window);
+        }
+    }
+    else
+    {
+        OpenComboWindows.RemoveTag(Window);
     }
 }
 
 // 等待旧 Montage 的完成回调退出后再尝试激活下一招。
 void USoulsCombatActionComponent::ScheduleDrain(int32 FinishedLightStage, bool bFinishedRoll)
 {
-    if (BufferedInput.IsSet() && CanAct())
+    if (Combo.HasBufferedInput() && CanAct())
     {
         DrainTimer = GetWorld()->GetTimerManager().SetTimerForNextTick(
             FTimerDelegate::CreateUObject(this, &ThisClass::DrainInput, FinishedLightStage, bFinishedRoll));
@@ -197,11 +268,13 @@ void USoulsCombatActionComponent::ScheduleDrain(int32 FinishedLightStage, bool b
 void USoulsCombatActionComponent::DrainInput(int32 FinishedLightStage, bool bFinishedRoll)
 {
     DrainTimer.Invalidate();
-    const TOptional<FBufferedInput> Intent = MoveTemp(BufferedInput);
-    BufferedInput.Reset();
-    if (Intent.IsSet() && CanAct() && ActiveLightStage == 0 && !bRolling && GetWorld()->GetTimeSeconds() < Intent->ExpiresAt)
+    const TOptional<FLECombatIntent> Intent = Combo.Consume(GetWorld()->GetTimeSeconds());
+    const FGameplayTagContainer Windows = MoveTemp(BufferedComboWindows);
+    BufferedComboWindows.Reset();
+    if (Intent.IsSet() && CanAct() && ActiveLightStage == 0 && !bRolling)
     {
-        DispatchInput(Intent.GetValue(), FinishedLightStage, bFinishedRoll);
+        const FName SourceNode = bFinishedRoll ? RollNode : (FinishedLightStage == 1 ? LightOneNode : LightTwoNode);
+        DispatchInput(Intent.GetValue(), SourceNode, Windows);
     }
 }
 
@@ -244,6 +317,7 @@ void USoulsCombatActionComponent::FinishLightAttack(bool bCancelled)
     }
     const int32 FinishedStage = ActiveLightStage;
     ActiveLightStage = 0;
+    OpenComboWindows.Reset();
     if (bCancelled)
     {
         Interrupt();
@@ -257,7 +331,9 @@ void USoulsCombatActionComponent::FinishLightAttack(bool bCancelled)
 // 取消缓存和翻滚，轻击资源仍由轻击 GA 的结束路径释放。
 void USoulsCombatActionComponent::Interrupt()
 {
-    BufferedInput.Reset();
+    Combo.Reset();
+    OpenComboWindows.Reset();
+    BufferedComboWindows.Reset();
     if (UWorld* World = GetWorld())
     {
         World->GetTimerManager().ClearTimer(DrainTimer);

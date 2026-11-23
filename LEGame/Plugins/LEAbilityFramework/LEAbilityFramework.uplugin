@@ -1,0 +1,16 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "LE Ability Framework",
+    "Description": "Enhanced Input 战斗意图、连招派生和 GAS 技能时间轴。",
+    "Category": "Gameplay",
+    "CanContainContent": true,
+    "Modules": [
+        { "Name": "LEAbilityFramework", "Type": "Runtime", "LoadingPhase": "Default" }
+    ],
+    "Plugins": [
+        { "Name": "EnhancedInput", "Enabled": true },
+        { "Name": "GameplayAbilities", "Enabled": true }
+    ]
+}

@@ -21,7 +21,8 @@ public:
     USoulsMeleeTraceComponent(const FObjectInitializer& ObjectInitializer);
 
     // 开始一次攻击，重置命中集合并接管普通移动和朝向。
-    bool BeginAttack(const USoulsAttackDefinition* Definition = nullptr, float LungeDistance = 0.0f);
+    bool BeginAttack(const USoulsAttackDefinition* Definition = nullptr, float LungeDistance = 0.0f,
+        bool bInUseAbilityHitWindow = false);
 
     // 动画通知开启或关闭有效期，关闭不会清除本次命中集合。
     UFUNCTION(BlueprintCallable, Category = "Souls|Combat")
@@ -107,4 +108,5 @@ private:
     float SavedMaxWalkSpeed = 0.0f;
     bool bAttackActive = false;
     bool bHitWindowEnabled = false;
+    bool bUseAbilityHitWindow = false;
 };

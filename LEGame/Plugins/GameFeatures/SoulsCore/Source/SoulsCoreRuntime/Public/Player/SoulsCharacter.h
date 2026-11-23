@@ -5,6 +5,7 @@
 #include "SoulsCharacter.generated.h"
 
 class USoulsHeroComponent;
+class USoulsCombatActionComponent;
 class USoulsLockOnComponent;
 class USoulsMeleeTraceComponent;
 class USoulsCombatReactionComponent;
@@ -43,6 +44,9 @@ protected:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Souls|Combat")
     TObjectPtr<USoulsMeleeTraceComponent> MeleeTrace;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Souls|Combat")
+    TObjectPtr<USoulsCombatActionComponent> CombatActions;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Souls|Combat")
     TObjectPtr<USoulsCombatReactionComponent> CombatReaction;

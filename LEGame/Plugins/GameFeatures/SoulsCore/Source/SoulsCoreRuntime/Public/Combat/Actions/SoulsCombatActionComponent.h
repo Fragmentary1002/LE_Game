@@ -5,6 +5,7 @@
 #include "Engine/NetSerialization.h"
 #include "TimerManager.h"
 #include "GameplayEffect.h"
+#include "LECombatCombo.h"
 #include "SoulsCombatActionComponent.generated.h"
 
 class ACharacter;
@@ -54,6 +55,9 @@ public:
     // 结束本段并在自然完成时尝试接续。
     void FinishLightAttack(bool bCancelled);
 
+    // 记录供派生规则使用的当前招式窗口。
+    void SetComboWindow(FGameplayTag Window, bool bOpen);
+
     // 清除缓存和翻滚，用于实际受击、死亡及 ASC 解绑。
     void Interrupt();
 
@@ -71,12 +75,22 @@ protected:
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
-    struct FBufferedInput
-    {
-        ESoulsCombatInput Input;
-        FVector Direction;
-        double ExpiresAt;
-    };
+    UPROPERTY(EditDefaultsOnly, Category = "Souls|Combo", meta = (RequiredAssetDataTags = "RowStructure=/Script/LEAbilityFramework.LECombatComboTransition"))
+    TSoftObjectPtr<UDataTable> ComboDefinitions;
+
+    UPROPERTY(EditDefaultsOnly, Category = "Souls|Combo", meta = (RequiredAssetDataTags = "RowStructure=/Script/LEAbilityFramework.LEAbilityRegistryRow"))
+    TSoftObjectPtr<UDataTable> AbilityRegistry;
+
+    UPROPERTY(Transient)
+    TObjectPtr<const UDataTable> LoadedAbilityRegistry;
+
+    TArray<FLECombatComboTransition> ComboTransitions;
+
+    // 载入派生表和技能注册表，同优先级规则按行名字典序匹配。
+    void LoadComboTables();
+
+    UPROPERTY(EditDefaultsOnly, Category = "Souls|Combo", meta = (ClampMin = "0"))
+    float InputBufferSeconds = 0.18f;
 
     // 只接收拥有者发来的有效离散意图。
     UFUNCTION(Server, Reliable)
@@ -86,7 +100,7 @@ private:
     void AcceptInput(ESoulsCombatInput Input, const FVector& Direction);
 
     // 根据刚结束的动作选择下一招。
-    void DispatchInput(const FBufferedInput& Input, int32 FinishedLightStage, bool bFinishedRoll);
+    void DispatchInput(const FLECombatIntent& Input, FName SourceNode, const FGameplayTagContainer& Windows);
 
     // 等旧能力的任务清理后消费缓存。
     void DrainInput(int32 FinishedLightStage, bool bFinishedRoll);
@@ -121,7 +135,9 @@ private:
 
     TWeakObjectPtr<UAbilitySystemComponent> BoundASC;
     TWeakObjectPtr<UAnimMontage> PlayingRollMontage;
-    TOptional<FBufferedInput> BufferedInput;
+    FLECombatCombo Combo;
+    FGameplayTagContainer OpenComboWindows;
+    FGameplayTagContainer BufferedComboWindows;
     FTimerHandle DrainTimer;
     FActiveGameplayEffectHandle ImmunityHandle;
     double LastSpendAt = 0.0;

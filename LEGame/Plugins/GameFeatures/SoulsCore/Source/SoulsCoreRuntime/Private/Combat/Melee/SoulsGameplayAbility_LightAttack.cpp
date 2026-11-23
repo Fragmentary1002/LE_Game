@@ -1,6 +1,11 @@
 #include "Combat/Melee/SoulsGameplayAbility_LightAttack.h"
 
 #include "Abilities/Tasks/AbilityTask_PlayMontageAndWait.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "Combat/Melee/AnimNotifyState_SoulsMeleeWindow.h"
+#include "LECombatTimelineTask.h"
+#include "NativeGameplayTags.h"
 #include "Enemies/SoulsEnemy.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
@@ -12,6 +17,49 @@
 #include "GameplayEffect.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SoulsGameplayAbility_LightAttack)
+
+namespace
+{
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Window_Souls_MeleeHit, "Window.Souls.MeleeHit");
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Window_Souls_ComboLight, "Window.Souls.Combo.Light");
+
+    // 优先使用定义中的命中窗口，旧资产可使用 Montage 轨道上的时间。
+    bool PopulatePlayerTimeline(const USoulsAttackDefinition& Definition, int32 Stage, TArray<FLECombatTimelineWindow>& Windows)
+    {
+        Windows = Definition.TimelineWindows;
+        if (!Windows.ContainsByPredicate([](const FLECombatTimelineWindow& Window)
+        {
+            return Window.Tag == TAG_Window_Souls_MeleeHit && Window.IsValid();
+        }))
+        {
+            for (const FAnimNotifyEvent& Notify : Definition.AttackMontage->Notifies)
+            {
+                if (Cast<UAnimNotifyState_SoulsMeleeWindow>(Notify.NotifyStateClass.Get()))
+                {
+                    FLECombatTimelineWindow Window{TAG_Window_Souls_MeleeHit,
+                        FMath::Max(0.0f, Notify.GetTriggerTime()), Notify.GetEndTriggerTime()};
+                    if (Window.IsValid())
+                    {
+                        Windows.Add(Window);
+                    }
+                }
+            }
+        }
+        if (Stage == 1 && !Windows.ContainsByPredicate([](const FLECombatTimelineWindow& Window)
+        {
+            return Window.Tag == TAG_Window_Souls_ComboLight && Window.IsValid();
+        }))
+        {
+            // 旧资产默认在最后 0.25 秒素材时间内接收轻击派生。
+            const float End = Definition.AttackMontage->GetPlayLength();
+            Windows.Add({TAG_Window_Souls_ComboLight, FMath::Max(0.0f, End - 0.25f), End});
+        }
+        return Windows.ContainsByPredicate([](const FLECombatTimelineWindow& Window)
+        {
+            return Window.Tag == TAG_Window_Souls_MeleeHit && Window.IsValid();
+        });
+    }
+}
 
 // 能力互斥由标签表达，避免独占组阻止受击能力进入。
 USoulsGameplayAbility_LightAttack::USoulsGameplayAbility_LightAttack(const FObjectInitializer& ObjectInitializer)
@@ -94,11 +142,17 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
         return;
     }
 
+    bool bUseAbilityHitWindow = false;
+    TArray<FLECombatTimelineWindow> TimelineWindows;
     if (Avatar->HasAuthority())
     {
         USoulsCombatActionComponent* Combat = Avatar->FindComponentByClass<USoulsCombatActionComponent>();
+        if (Combat)
+        {
+            bUseAbilityHitWindow = PopulatePlayerTimeline(*Definition, Stage, TimelineWindows);
+        }
         if (!Definition->DamageEffectClass || (bPlayerInput && !Combat) ||
-            !CommitAbility(Handle, ActorInfo, ActivationInfo) || !Trace->BeginAttack(Definition, LungeDistance))
+            !CommitAbility(Handle, ActorInfo, ActivationInfo) || !Trace->BeginAttack(Definition, LungeDistance, bUseAbilityHitWindow))
         {
             EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
             return;
@@ -126,6 +180,15 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
     MontageTask->OnInterrupted.AddDynamic(this, &ThisClass::HandleMontageInterrupted);
     MontageTask->OnCancelled.AddDynamic(this, &ThisClass::HandleMontageInterrupted);
     MontageTask->ReadyForActivation();
+    if (IsActive() && ActiveCombat.IsValid() && (!TimelineWindows.IsEmpty() || !Definition->TimelinePoints.IsEmpty()))
+    {
+        const FAnimMontageInstance* Instance = ActorInfo->GetAnimInstance()->GetActiveInstanceForMontage(Definition->AttackMontage);
+        const float EffectiveRate = (Instance ? Instance->GetPlayRate() : PlayRate) * Definition->AttackMontage->RateScale;
+        TimelineTask = ULECombatTimelineTask::Create(this, TimelineWindows, Definition->TimelinePoints, EffectiveRate);
+        TimelineTask->OnWindowChanged.AddUObject(this, &ThisClass::HandleTimelineWindow);
+        TimelineTask->OnPointReached.AddUObject(this, &ThisClass::HandleTimelinePoint);
+        TimelineTask->ReadyForActivation();
+    }
 }
 
 // 即使动画通知未收到 NotifyEnd，结束能力仍立即停止真实伤害。
@@ -133,6 +196,15 @@ void USoulsGameplayAbility_LightAttack::EndAbility(const FGameplayAbilitySpecHan
     const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
     bool bReplicateEndAbility, bool bWasCancelled)
 {
+    if (TimelineTask)
+    {
+        ULECombatTimelineTask* Task = TimelineTask.Get();
+        TimelineTask = nullptr;
+        if (!Task->IsFinished())
+        {
+            Task->EndTask();
+        }
+    }
     if (MontageTask)
     {
         MontageTask->OnCompleted.RemoveDynamic(this, &ThisClass::HandleMontageCompleted);
@@ -153,6 +225,35 @@ void USoulsGameplayAbility_LightAttack::EndAbility(const FGameplayAbilitySpecHan
     if (USoulsCombatActionComponent* CombatActions = Combat.Get())
     {
         CombatActions->FinishLightAttack(bWasCancelled);
+    }
+}
+
+// 由本次 GA 选择窗口接收方，同一命中窗口只交给刀刃检测。
+void USoulsGameplayAbility_LightAttack::HandleTimelineWindow(FGameplayTag Tag, bool bOpen)
+{
+    if (Tag == TAG_Window_Souls_MeleeHit)
+    {
+        if (USoulsMeleeTraceComponent* Trace = ActiveTrace.Get())
+        {
+            Trace->SetHitWindowEnabled(bOpen);
+        }
+    }
+    else if (USoulsCombatActionComponent* Combat = ActiveCombat.Get())
+    {
+        Combat->SetComboWindow(Tag, bOpen);
+    }
+}
+
+// 使用 ASC 派发一次已配置的 Gameplay Event。
+void USoulsGameplayAbility_LightAttack::HandleTimelinePoint(FGameplayTag Tag)
+{
+    if (UAbilitySystemComponent* ASC = GetAbilitySystemComponentFromActorInfo())
+    {
+        FGameplayEventData Event;
+        Event.EventTag = Tag;
+        Event.Instigator = GetAvatarActorFromActorInfo();
+        Event.Target = Event.Instigator;
+        ASC->HandleGameplayEvent(Tag, &Event);
     }
 }
 

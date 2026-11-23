@@ -10,7 +10,7 @@ public class SoulsCoreRuntime : ModuleRules
         {
             "Core", "CoreUObject", "Engine", "LyraGame", "AIModule", "GameplayAbilities",
             "GameplayTags", "GameplayTasks", "ModularGameplay", "ModularGameplayActors",
-            "EnhancedInput", "InputCore", "UMG", "CommonUI", "CommonGame"
+            "LEAbilityFramework", "EnhancedInput", "InputCore", "UMG", "CommonUI", "CommonGame"
         });
         PrivateDependencyModuleNames.AddRange(new[] { "Slate", "SlateCore", "Projects" });
     }

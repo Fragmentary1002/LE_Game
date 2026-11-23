@@ -5,6 +5,7 @@
 #include "SoulsGameplayAbility_LightAttack.generated.h"
 
 class UAbilityTask_PlayMontageAndWait;
+class ULECombatTimelineTask;
 class USoulsCombatActionComponent;
 class USoulsMeleeTraceComponent;
 
@@ -24,7 +25,7 @@ protected:
         const FGameplayTagContainer* SourceTags, const FGameplayTagContainer* TargetTags,
         FGameplayTagContainer* OptionalRelevantTags) const override;
 
-    // 提交能力并启动完整一次 Montage，窗口由动画通知驱动。
+    // 提交能力并启动 Montage 和本次招式配置的时间轴。
     virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
         const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
 
@@ -46,6 +47,15 @@ private:
 
     UPROPERTY(Transient)
     TObjectPtr<UAbilityTask_PlayMontageAndWait> MontageTask;
+
+    // 把通用命中窗口和派生窗口分发给 Souls 组件。
+    void HandleTimelineWindow(FGameplayTag Tag, bool bOpen);
+
+    // 将配置中的点事件发送到当前角色的 ASC。
+    void HandleTimelinePoint(FGameplayTag Tag);
+
+    UPROPERTY(Transient)
+    TObjectPtr<ULECombatTimelineTask> TimelineTask;
 
     TWeakObjectPtr<USoulsCombatActionComponent> ActiveCombat;
     TWeakObjectPtr<USoulsMeleeTraceComponent> ActiveTrace;

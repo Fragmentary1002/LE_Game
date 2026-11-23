@@ -12,4 +12,8 @@ class SOULSCORERUNTIME_API ASoulsPlayerController : public ALyraPlayerController
 public:
     // 沿用 Lyra 的玩家控制器初始化。
     ASoulsPlayerController(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
+protected:
+    // 在所有增强输入回调之后统一提交战斗意图。
+    virtual void PostProcessInput(float DeltaTime, bool bGamePaused) override;
 };

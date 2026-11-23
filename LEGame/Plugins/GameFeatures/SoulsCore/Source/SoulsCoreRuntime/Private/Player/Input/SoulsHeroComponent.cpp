@@ -20,9 +20,13 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "LyraGameplayTags.h"
+#include "NativeGameplayTags.h"
 #include "Targeting/SoulsLockOnComponent.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SoulsHeroComponent)
+
+UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Intent_LightAttack, "InputIntent.Souls.LightAttack");
+UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Intent_Roll, "InputIntent.Souls.Roll");
 
 // 沿用 Lyra 的初始化状态与能力输入分发。
 USoulsHeroComponent::USoulsHeroComponent(const FObjectInitializer& ObjectInitializer)
@@ -58,6 +62,7 @@ void USoulsHeroComponent::RemoveSoulsInput()
     {
         BoundSubsystem->RemoveMappingContext(RollMapping);
     }
+    CombatInputQueue.Reset();
     BoundMoveAction.Reset();
     InputHandles.Reset();
     BoundInput.Reset();
@@ -88,7 +93,8 @@ void USoulsHeroComponent::InitializePlayerInput(UInputComponent* PlayerInputComp
     BoundMoveAction = Config->FindNativeInputActionForTag(LyraGameplayTags::InputTag_Move, false);
     if (const UInputAction* LightAttack = Config->FindAbilityInputActionForTag(FGameplayTag::RequestGameplayTag(TEXT("InputTag.Souls.LightAttack")), false))
     {
-        InputHandles.Add(Input->BindAction(LightAttack, ETriggerEvent::Started, this, &ThisClass::Input_LightAttack).GetHandle());
+        const FLECombatInputBinding Binding{LightAttack, ETriggerEvent::Started, TAG_Intent_LightAttack, 10};
+        InputHandles.Add(Binding.Bind(*Input, this, &ThisClass::Input_CombatAction));
     }
     if (!RollMapping)
     {
@@ -99,7 +105,8 @@ void USoulsHeroComponent::InitializePlayerInput(UInputComponent* PlayerInputComp
         RollMapping->MapKey(RollAction, EKeys::Gamepad_FaceButton_Right);
     }
     Subsystem->AddMappingContext(RollMapping, 1);
-    InputHandles.Add(Input->BindAction(RollAction, ETriggerEvent::Started, this, &ThisClass::Input_Roll).GetHandle());
+    const FLECombatInputBinding RollBinding{RollAction.Get(), ETriggerEvent::Started, TAG_Intent_Roll, 100};
+    InputHandles.Add(RollBinding.Bind(*Input, this, &ThisClass::Input_CombatAction));
     const UInputAction* LockAction = Config->FindNativeInputActionForTag(FGameplayTag::RequestGameplayTag(TEXT("InputTag.Souls.LockOn")));
     const UInputAction* SwitchAction = Config->FindNativeInputActionForTag(FGameplayTag::RequestGameplayTag(TEXT("InputTag.Souls.SwitchTarget")));
     if (LockAction)
@@ -139,23 +146,32 @@ void USoulsHeroComponent::Input_Move(const FInputActionValue& InputActionValue)
     }
 }
 
-// 将已有轻击输入的按下边沿交给战斗组件。
-void USoulsHeroComponent::Input_LightAttack(const FInputActionValue& Value)
+// 收集增强输入提交的意图，在本次输入处理完成后统一仲裁。
+void USoulsHeroComponent::Input_CombatAction(const FInputActionValue&, FGameplayTag IntentTag, int32 Priority)
 {
-    if (USoulsCombatActionComponent* Combat = GetOwner()->FindComponentByClass<USoulsCombatActionComponent>())
+    const FVector Direction = IntentTag == TAG_Intent_Roll ? GetRollInputDirection() : FVector::ZeroVector;
+    CombatInputQueue.Submit(IntentTag, Direction, Priority);
+}
+
+// 将获选意图交给 Souls 的权威战斗入口。
+void USoulsHeroComponent::FlushCombatInput()
+{
+    const TOptional<FLECombatIntent> Intent = CombatInputQueue.Consume();
+    USoulsCombatActionComponent* Combat = Intent.IsSet() ? GetOwner()->FindComponentByClass<USoulsCombatActionComponent>() : nullptr;
+    if (Combat)
     {
-        Combat->SubmitInput(ESoulsCombatInput::LightAttack);
+        const ESoulsCombatInput Input = Intent->Tag == TAG_Intent_Roll ? ESoulsCombatInput::Roll : ESoulsCombatInput::LightAttack;
+        Combat->SubmitInput(Input, Intent->Direction);
     }
 }
 
-// 捕获当前移动轴在相机平面内的方向，零向量交由服务端选择角色前向。
-void USoulsHeroComponent::Input_Roll(const FInputActionValue& Value)
+// 将当前移动轴转换为翻滚方向，零向量由服务端按角色前向处理。
+FVector USoulsHeroComponent::GetRollInputDirection() const
 {
-    USoulsCombatActionComponent* Combat = GetOwner()->FindComponentByClass<USoulsCombatActionComponent>();
     const APlayerController* PC = GetController<APlayerController>();
-    if (!Combat || !PC)
+    if (!PC)
     {
-        return;
+        return FVector::ZeroVector;
     }
     FVector Direction = FVector::ZeroVector;
     const UEnhancedPlayerInput* EnhancedPlayerInput = Cast<UEnhancedPlayerInput>(PC->PlayerInput);
@@ -168,7 +184,7 @@ void USoulsHeroComponent::Input_Roll(const FInputActionValue& Value)
             Direction = CameraYaw.RotateVector(FVector(Axes.Y, Axes.X, 0.0f));
         }
     }
-    Combat->SubmitInput(ESoulsCombatInput::Roll, Direction);
+    return Direction;
 }
 
 // 锁定状态下忽略鼠标镜头旋转，避免与自动跟随争用控制旋转。

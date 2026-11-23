@@ -24,7 +24,7 @@ ASoulsCharacter::ASoulsCharacter(const FObjectInitializer& ObjectInitializer)
     LockOn = CreateDefaultSubobject<USoulsLockOnComponent>(TEXT("SoulsLockOn"));
     MeleeTrace = CreateDefaultSubobject<USoulsMeleeTraceComponent>(TEXT("MeleeTrace"));
     CombatReaction = CreateDefaultSubobject<USoulsCombatReactionComponent>(TEXT("CombatReaction"));
-    CreateDefaultSubobject<USoulsCombatActionComponent>(TEXT("CombatActions"));
+    CombatActions = CreateDefaultSubobject<USoulsCombatActionComponent>(TEXT("CombatActions"));
     GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel6, ECR_Overlap);
     GetMesh()->SetCollisionResponseToChannel(ECC_GameTraceChannel6, ECR_Ignore);
     GetMesh()->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;

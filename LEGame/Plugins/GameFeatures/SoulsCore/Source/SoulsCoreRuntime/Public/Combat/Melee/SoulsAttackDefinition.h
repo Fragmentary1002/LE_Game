@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "LECombatTimelineTask.h"
 #include "SoulsAttackDefinition.generated.h"
 
 class UAnimMontage;
@@ -22,6 +23,12 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Souls|Attack", meta = (ClampMin = "0.1"))
     float PlayRate = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Souls|Timeline")
+    TArray<FLECombatTimelineWindow> TimelineWindows;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Souls|Timeline")
+    TArray<FLECombatTimelinePoint> TimelinePoints;
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Souls|Trace", meta = (ClampMin = "1"))
     float TraceRadius = 10.0f;
