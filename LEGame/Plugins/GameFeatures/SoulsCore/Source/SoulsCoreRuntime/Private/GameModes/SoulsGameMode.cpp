@@ -4,8 +4,8 @@
 #include "AbilitySystemComponent.h"
 #include "Character/LyraHealthComponent.h"
 #include "Character/LyraPawnData.h"
-#include "Character/SoulsCharacter.h"
-#include "Checkpoint/SoulsBonfire.h"
+#include "Player/SoulsCharacter.h"
+#include "Progression/Checkpoints/SoulsBonfire.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -16,10 +16,10 @@
 #include "Player/LyraPlayerState.h"
 #include "Player/SoulsPlayerController.h"
 #include "Player/SoulsPlayerState.h"
-#include "Progress/SoulsSoulDrop.h"
-#include "System/SoulsGameSession.h"
+#include "Progression/SoulDrops/SoulsSoulDrop.h"
+#include "GameModes/SoulsGameSession.h"
 #include "UI/SoulsHUD.h"
-#include "World/SoulsEncounterSubsystem.h"
+#include "Enemies/Spawning/SoulsEncounterSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SoulsGameMode)
 

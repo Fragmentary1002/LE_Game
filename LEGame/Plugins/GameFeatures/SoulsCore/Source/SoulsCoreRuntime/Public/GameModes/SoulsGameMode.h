@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameModes/LyraGameMode.h"
-#include "Progress/SoulsProgressSubsystem.h"
+#include "Progression/SoulsProgressSubsystem.h"
 #include "TimerManager.h"
 #include "SoulsGameMode.generated.h"
 

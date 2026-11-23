@@ -1,6 +1,6 @@
 #include "SoulsEditorSetupLibrary.h"
 
-#include "AI/SoulsEnemyBehavior.h"
+#include "Enemies/BehaviorTree/SoulsEnemyBehavior.h"
 #include "GameModes/SoulsGameMode.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "BehaviorTree/BlackboardData.h"
