@@ -9,11 +9,16 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameModes/SoulsGameState.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Player/LyraPlayerStart.h"
 #include "Player/LyraPlayerState.h"
+#include "Player/SoulsPlayerController.h"
+#include "Player/SoulsPlayerState.h"
 #include "Progress/SoulsSoulDrop.h"
+#include "System/SoulsGameSession.h"
+#include "UI/SoulsHUD.h"
 #include "World/SoulsEncounterSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SoulsGameMode)
@@ -31,6 +36,18 @@ namespace
     {
         return Wallet + FMath::Clamp<int64>(Amount, 0, MAX_int64 - Wallet);
     }
+}
+
+// 设置此玩法专用的框架类，保留 Lyra 的 Experience 和 PawnData 选择流程。
+ASoulsGameMode::ASoulsGameMode(const FObjectInitializer& ObjectInitializer)
+    : Super(ObjectInitializer)
+{
+    GameStateClass = ASoulsGameState::StaticClass();
+    GameSessionClass = ASoulsGameSession::StaticClass();
+    PlayerControllerClass = ASoulsPlayerController::StaticClass();
+    PlayerStateClass = ASoulsPlayerState::StaticClass();
+    DefaultPawnClass = ASoulsCharacter::StaticClass();
+    HUDClass = ASoulsHUD::StaticClass();
 }
 
 // 在 Experience 加载完成后开始等待本地玩家与存档。

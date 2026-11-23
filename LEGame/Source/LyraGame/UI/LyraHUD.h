@@ -20,7 +20,7 @@ class UObject;
  *  This class exists primarily for debug rendering
  */
 UCLASS(Config = Game)
-class ALyraHUD : public AHUD
+class LYRAGAME_API ALyraHUD : public AHUD
 {
 	GENERATED_BODY()
 

@@ -10,7 +10,7 @@ class UObject;
 
 
 UCLASS(Config = Game)
-class ALyraGameSession : public AGameSession
+class LYRAGAME_API ALyraGameSession : public AGameSession
 {
 	GENERATED_BODY()
 

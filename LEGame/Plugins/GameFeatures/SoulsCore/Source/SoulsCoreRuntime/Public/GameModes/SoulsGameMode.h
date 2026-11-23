@@ -17,6 +17,9 @@ class SOULSCORERUNTIME_API ASoulsGameMode : public ALyraGameMode
     GENERATED_BODY()
 
 public:
+    // 为 Souls 关卡配置各框架类，玩家角色优先使用 Experience 中的 PawnData。
+    ASoulsGameMode(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
     // 按需点亮篝火，已点亮时执行休息。
     bool RequestBonfire(APlayerController* Player, const ASoulsBonfire* Bonfire);
 
