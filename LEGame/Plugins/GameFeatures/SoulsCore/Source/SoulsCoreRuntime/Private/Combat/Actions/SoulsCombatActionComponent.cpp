@@ -12,8 +12,10 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/RootMotionSource.h"
 #include "GameModes/SoulsGameMode.h"
+#include "LEAbilityDefinition.h"
 #include "GameplayEffectComponents/TargetTagsGameplayEffectComponent.h"
 #include "NativeGameplayTags.h"
+#include "Templates/UnrealTemplate.h"
 #include "Net/UnrealNetwork.h"
 #include "Targeting/SoulsLockOnComponent.h"
 #include "TimerManager.h"
@@ -33,12 +35,14 @@ namespace
     constexpr float ImmunityStart = 0.08f;
     constexpr float ImmunityEnd = 0.30f;
 
-    const FName IdleNode(TEXT("Idle"));
-    const FName LightOneNode(TEXT("Light1"));
-    const FName LightTwoNode(TEXT("Light2"));
-    const FName RollNode(TEXT("Roll"));
-
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Combo_Entry, "Combo.Souls.Entry");
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Combo_LightOne, "Combo.Souls.Light.01");
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Combo_LightTwo, "Combo.Souls.Light.02");
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Combo_Roll, "Combo.Souls.Roll");
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Ability_LightOne, "Ability.Souls.LightAttack.01");
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Ability_LightTwo, "Ability.Souls.LightAttack.02");
     UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Ability_Roll, "Ability.Souls.Roll");
+
 }
 
 // 用现有 Lyra 免疫标签处理正常伤害，效果独立过期。
@@ -89,26 +93,62 @@ void USoulsCombatActionComponent::BeginPlay()
     }
 }
 
-// 在权威 Pawn 就绪时加载规则，行名为等优先级规则提供固定顺序。
+// 载入表数据并核对当前运行时所需的行类型。
 void USoulsCombatActionComponent::LoadComboTables()
 {
     const UDataTable* Definitions = ComboDefinitions.LoadSynchronous();
     const UDataTable* Registry = AbilityRegistry.LoadSynchronous();
-    if (!Definitions || Definitions->GetRowStruct() != FLECombatComboTransition::StaticStruct() ||
+    if (!Definitions || Definitions->GetRowStruct() != FLECombatComboDefinitionRow::StaticStruct() ||
         !Registry || Registry->GetRowStruct() != FLEAbilityRegistryRow::StaticStruct())
     {
         UE_LOG(LogTemp, Error, TEXT("Souls 连招表或技能注册表缺失，或者行类型不匹配。"));
         return;
     }
 
+    LoadedComboDefinitions = Definitions;
     LoadedAbilityRegistry = Registry;
-    TArray<FName> RowNames = Definitions->GetRowNames();
-    RowNames.Sort(FNameLexicalLess());
-    ComboTransitions.Reserve(RowNames.Num());
-    for (const FName RowName : RowNames)
+}
+
+// 仅接受以 Combo Tag 命名并且标签字段一致的节点行。
+const FLECombatComboDefinitionRow* USoulsCombatActionComponent::FindComboNode(FGameplayTag ComboTag) const
+{
+    const FLECombatComboDefinitionRow* Node = LoadedComboDefinitions ? LoadedComboDefinitions->FindRow<FLECombatComboDefinitionRow>(
+        ComboTag.GetTagName(), TEXT("Souls Combo"), false) : nullptr;
+    return Node && Node->ComboTag == ComboTag ? Node : nullptr;
+}
+
+// 按本次节点的配置增加 ASC 标签计数。
+void USoulsCombatActionComponent::EnterComboNode(FGameplayTag ComboTag)
+{
+    ActiveComboTag = ComboTag;
+    const FLECombatComboDefinitionRow* Node = FindComboNode(ComboTag);
+    UAbilitySystemComponent* ASC = BoundASC.Get();
+    if (Node && ASC)
     {
-        ComboTransitions.Add(*Definitions->FindRow<FLECombatComboTransition>(RowName, TEXT("Souls Combo")));
+        for (const FGameplayTag& Tag : Node->GrantedTags)
+        {
+            ActiveGrantedTags.AddTag(Tag);
+            ASC->AddLooseGameplayTag(Tag);
+            if (ActiveComboTag != ComboTag)
+            {
+                return;
+            }
+        }
     }
+}
+
+// 先解除节点状态，再收回自己添加的标签计数。
+FGameplayTag USoulsCombatActionComponent::LeaveComboNode()
+{
+    const FGameplayTag FinishedComboTag = ActiveComboTag;
+    ActiveComboTag = FGameplayTag();
+    const FGameplayTagContainer GrantedTags = MoveTemp(ActiveGrantedTags);
+    ActiveGrantedTags.Reset();
+    if (UAbilitySystemComponent* ASC = BoundASC.Get())
+    {
+        ASC->RemoveLooseGameplayTags(GrantedTags);
+    }
+    return FinishedComboTag;
 }
 
 // 退出前释放已预约的回调、免疫和移动源。
@@ -141,7 +181,7 @@ void USoulsCombatActionComponent::HandleAbilitySystemRemoved()
     if (GetOwner()->HasAuthority())
     {
         Interrupt();
-        ActiveLightStage = 0;
+        LeaveComboNode();
         BoundASC.Reset();
         SetComponentTickEnabled(false);
     }
@@ -185,54 +225,60 @@ void USoulsCombatActionComponent::AcceptInput(ESoulsCombatInput Input, const FVe
     const FGameplayTag IntentTag = FGameplayTag::RequestGameplayTag(Input == ESoulsCombatInput::Roll
         ? TEXT("InputIntent.Souls.Roll") : TEXT("InputIntent.Souls.LightAttack"));
     const FLECombatIntent Intent{IntentTag, Direction};
-    if (ActiveLightStage != 0 || bRolling || DrainTimer.IsValid())
+    if (ActiveComboTag.IsValid() || bRolling || DrainTimer.IsValid())
     {
         Combo.Buffer(Intent, GetWorld()->GetTimeSeconds(), InputBufferSeconds);
         BufferedComboWindows = OpenComboWindows;
     }
     else
     {
-        DispatchInput(Intent, IdleNode, OpenComboWindows);
+        DispatchInput(Intent, TAG_Combo_Entry, OpenComboWindows);
     }
 }
 
-// 将通用规则选出的目标节点转换为 Souls 动作。
-void USoulsCombatActionComponent::DispatchInput(const FLECombatIntent& Intent, FName SourceNode,
+// 由输入意图定位目标 Combo，再通过目标的 Ability Tag 解析技能定义。
+void USoulsCombatActionComponent::DispatchInput(const FLECombatIntent& Intent, FGameplayTag SourceComboTag,
     const FGameplayTagContainer& Windows)
 {
-    FGameplayTagContainer OwnedTags;
-    BoundASC->GetOwnedGameplayTags(OwnedTags);
-    const FLECombatComboTransition* Transition = FLECombatCombo::FindTransition(
-        ComboTransitions, SourceNode, Intent.Tag, Windows, OwnedTags);
-    if (!Transition || !LoadedAbilityRegistry)
+    const FLECombatComboDefinitionRow* Source = FindComboNode(SourceComboTag);
+    if (!Source || !LoadedAbilityRegistry)
     {
-        return;
-    }
-
-    const FLEAbilityRegistryRow* Ability = LoadedAbilityRegistry->FindRow<FLEAbilityRegistryRow>(
-        Transition->TargetNode, TEXT("Souls Ability Registry"));
-    if (!Ability)
-    {
-        return;
-    }
-    if (!Ability->AbilityClass)
-    {
-        if (Ability->AbilityTag == TAG_Ability_Roll)
-        {
-            StartRoll(Intent.Direction);
-        }
         return;
     }
 
     UAbilitySystemComponent* ASC = BoundASC.Get();
-    const FGameplayAbilitySpec* Spec = ASC->FindAbilitySpecFromClass(Ability->AbilityClass);
-    if (Spec)
+    FGameplayTagContainer OwnedTags;
+    ASC->GetOwnedGameplayTags(OwnedTags);
+    const FLECombatComboTransition* Transition = FLECombatCombo::FindTransition(
+        Source->Transitions, Intent.Tag, Windows, OwnedTags);
+    const FLECombatComboDefinitionRow* Target = Transition ? FindComboNode(Transition->TargetComboTag) : nullptr;
+    if (!Target || !Target->AbilityTag.IsValid())
     {
+        return;
+    }
+    if (Target->AbilityTag == TAG_Ability_Roll)
+    {
+        StartRoll(Intent.Direction, Target->ComboTag);
+        return;
+    }
+
+    const FLEAbilityRegistryRow* Ability = LoadedAbilityRegistry->FindRow<FLEAbilityRegistryRow>(
+        Target->AbilityTag.GetTagName(), TEXT("Souls Ability Registry"));
+    const ULEAbilityDefinition* Definition = Ability ? Ability->AbilityDefinition.Get() : nullptr;
+    if (!Definition || Ability->AbilityTag != Target->AbilityTag || Definition->AbilityTag != Ability->AbilityTag ||
+        !Definition->AbilityClass || !Definition->Interaction.CanActivate(OwnedTags))
+    {
+        return;
+    }
+
+    if (const FGameplayAbilitySpec* Spec = ASC->FindAbilitySpecFromClass(Definition->AbilityClass))
+    {
+        TGuardValue<FGameplayTag> PendingNodeGuard(PendingComboTag, Target->ComboTag);
         FGameplayEventData Event;
-        Event.EventTag = Ability->ActivationEvent;
+        Event.EventTag = Ability->AbilityTag;
         Event.Instigator = GetOwner();
         Event.Target = GetOwner();
-        Event.EventMagnitude = Ability->EventMagnitude;
+        Event.OptionalObject = Definition;
         ASC->TriggerAbilityFromGameplayEvent(Spec->Handle, ASC->AbilityActorInfo.Get(), Event.EventTag, &Event, *ASC);
     }
 }
@@ -255,26 +301,25 @@ void USoulsCombatActionComponent::SetComboWindow(FGameplayTag Window, bool bOpen
 }
 
 // 等待旧 Montage 的完成回调退出后再尝试激活下一招。
-void USoulsCombatActionComponent::ScheduleDrain(int32 FinishedLightStage, bool bFinishedRoll)
+void USoulsCombatActionComponent::ScheduleDrain(FGameplayTag FinishedComboTag)
 {
     if (Combo.HasBufferedInput() && CanAct())
     {
         DrainTimer = GetWorld()->GetTimerManager().SetTimerForNextTick(
-            FTimerDelegate::CreateUObject(this, &ThisClass::DrainInput, FinishedLightStage, bFinishedRoll));
+            FTimerDelegate::CreateUObject(this, &ThisClass::DrainInput, FinishedComboTag));
     }
 }
 
 // 先取出并清空缓存，保证拒绝起招的意图也只消费一次。
-void USoulsCombatActionComponent::DrainInput(int32 FinishedLightStage, bool bFinishedRoll)
+void USoulsCombatActionComponent::DrainInput(FGameplayTag FinishedComboTag)
 {
     DrainTimer.Invalidate();
     const TOptional<FLECombatIntent> Intent = Combo.Consume(GetWorld()->GetTimeSeconds());
     const FGameplayTagContainer Windows = MoveTemp(BufferedComboWindows);
     BufferedComboWindows.Reset();
-    if (Intent.IsSet() && CanAct() && ActiveLightStage == 0 && !bRolling)
+    if (Intent.IsSet() && CanAct() && !ActiveComboTag.IsValid() && !bRolling)
     {
-        const FName SourceNode = bFinishedRoll ? RollNode : (FinishedLightStage == 1 ? LightOneNode : LightTwoNode);
-        DispatchInput(Intent.GetValue(), SourceNode, Windows);
+        DispatchInput(Intent.GetValue(), FinishedComboTag, Windows);
     }
 }
 
@@ -293,7 +338,7 @@ bool USoulsCombatActionComponent::CanAct() const
 // 在 GAS 激活检查中提前拒绝精力不足或正在翻滚的轻击。
 bool USoulsCombatActionComponent::CanStartLightAttack() const
 {
-    return CanAct() && !bRolling && ActiveLightStage == 0 &&
+    return CanAct() && !bRolling && !ActiveComboTag.IsValid() &&
         BoundASC->GetNumericAttribute(USoulsStaminaSet::GetStaminaAttribute()) >= LightCost;
 }
 
@@ -304,27 +349,27 @@ bool USoulsCombatActionComponent::StartLightAttack(int32 Stage)
     {
         return false;
     }
-    ActiveLightStage = Stage;
+    const FGameplayTag DirectComboTag = Stage == 2 ? TAG_Combo_LightTwo.GetTag() : TAG_Combo_LightOne.GetTag();
+    EnterComboNode(PendingComboTag.IsValid() ? PendingComboTag : DirectComboTag);
     return true;
 }
 
 // 只有正常完成的轻击可以消费缓存进入下一招。
 void USoulsCombatActionComponent::FinishLightAttack(bool bCancelled)
 {
-    if (ActiveLightStage == 0)
+    if (!ActiveComboTag.IsValid() || bRolling)
     {
         return;
     }
-    const int32 FinishedStage = ActiveLightStage;
-    ActiveLightStage = 0;
     OpenComboWindows.Reset();
+    const FGameplayTag FinishedComboTag = LeaveComboNode();
     if (bCancelled)
     {
         Interrupt();
     }
     else
     {
-        ScheduleDrain(FinishedStage, false);
+        ScheduleDrain(FinishedComboTag);
     }
 }
 
@@ -357,7 +402,7 @@ bool USoulsCombatActionComponent::SpendStamina(float Cost)
 }
 
 // 施加可碰撞的短距离位移，并把方向固定在动作起动的一刻。
-void USoulsCombatActionComponent::StartRoll(const FVector& Direction)
+void USoulsCombatActionComponent::StartRoll(const FVector& Direction, FGameplayTag ComboTag)
 {
     ACharacter* Character = GetPawn<ACharacter>();
     UCharacterMovementComponent* Movement = Character ? Character->GetCharacterMovement() : nullptr;
@@ -387,6 +432,7 @@ void USoulsCombatActionComponent::StartRoll(const FVector& Direction)
     RollMotionId = Movement->ApplyRootMotionSource(Motion);
     PlayRouteRollMontage(*Character);
     Character->ForceNetUpdate();
+    EnterComboNode(ComboTag);
 }
 
 // 闪避动作只负责表现，实际位移仍由当前 Root Motion Source 驱动。
@@ -439,9 +485,10 @@ void USoulsCombatActionComponent::FinishRoll(bool bCancelled)
         Character->ForceNetUpdate();
     }
     PlayingRollMontage.Reset();
+    const FGameplayTag FinishedComboTag = LeaveComboNode();
     if (!bCancelled)
     {
-        ScheduleDrain(0, true);
+        ScheduleDrain(FinishedComboTag);
     }
 }
 
@@ -504,7 +551,7 @@ void USoulsCombatActionComponent::TickComponent(float DeltaTime, ELevelTick Tick
         }
         return;
     }
-    if (ActiveLightStage != 0 || ASC->HasMatchingGameplayTag(FGameplayTag::RequestGameplayTag(TEXT("State.Souls.HitReact"))))
+    if (ActiveComboTag.IsValid() || ASC->HasMatchingGameplayTag(FGameplayTag::RequestGameplayTag(TEXT("State.Souls.HitReact"))))
     {
         return;
     }

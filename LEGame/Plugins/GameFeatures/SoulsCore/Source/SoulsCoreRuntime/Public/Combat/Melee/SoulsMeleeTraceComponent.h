@@ -22,7 +22,7 @@ public:
 
     // 开始一次攻击，重置命中集合并接管普通移动和朝向。
     bool BeginAttack(const USoulsAttackDefinition* Definition = nullptr, float LungeDistance = 0.0f,
-        bool bInUseAbilityHitWindow = false);
+        bool bInUseAbilityHitWindow = false, const UAnimSequenceBase* Montage = nullptr);
 
     // 动画通知开启或关闭有效期，关闭不会清除本次命中集合。
     UFUNCTION(BlueprintCallable, Category = "Souls|Combat")
@@ -98,6 +98,7 @@ private:
     void StopLunge();
 
     TWeakObjectPtr<const USoulsAttackDefinition> ActiveAttackDefinition;
+    TWeakObjectPtr<const UAnimSequenceBase> ActiveMontage;
     float ActiveLungeDistance = 0.0f;
     uint16 LungeSourceId = 0;
     TSet<TWeakObjectPtr<AActor>> HitActors;

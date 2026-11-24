@@ -75,7 +75,7 @@ protected:
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
-    UPROPERTY(EditDefaultsOnly, Category = "Souls|Combo", meta = (RequiredAssetDataTags = "RowStructure=/Script/LEAbilityFramework.LECombatComboTransition"))
+    UPROPERTY(EditDefaultsOnly, Category = "Souls|Combo", meta = (RequiredAssetDataTags = "RowStructure=/Script/LEAbilityFramework.LECombatComboDefinitionRow"))
     TSoftObjectPtr<UDataTable> ComboDefinitions;
 
     UPROPERTY(EditDefaultsOnly, Category = "Souls|Combo", meta = (RequiredAssetDataTags = "RowStructure=/Script/LEAbilityFramework.LEAbilityRegistryRow"))
@@ -84,10 +84,20 @@ private:
     UPROPERTY(Transient)
     TObjectPtr<const UDataTable> LoadedAbilityRegistry;
 
-    TArray<FLECombatComboTransition> ComboTransitions;
+    UPROPERTY(Transient)
+    TObjectPtr<const UDataTable> LoadedComboDefinitions;
 
-    // 载入派生表和技能注册表，同优先级规则按行名字典序匹配。
+    // 载入并校验连招定义和技能注册表。
     void LoadComboTables();
+
+    // 按标签查找连招节点，并校验行名和节点标签一致。
+    const FLECombatComboDefinitionRow* FindComboNode(FGameplayTag ComboTag) const;
+
+    // 登记启动成功的节点，并为该节点授予临时标签。
+    void EnterComboNode(FGameplayTag ComboTag);
+
+    // 收回本节点授予的标签，并返回结束的节点标签。
+    FGameplayTag LeaveComboNode();
 
     UPROPERTY(EditDefaultsOnly, Category = "Souls|Combo", meta = (ClampMin = "0"))
     float InputBufferSeconds = 0.18f;
@@ -100,13 +110,13 @@ private:
     void AcceptInput(ESoulsCombatInput Input, const FVector& Direction);
 
     // 根据刚结束的动作选择下一招。
-    void DispatchInput(const FLECombatIntent& Input, FName SourceNode, const FGameplayTagContainer& Windows);
+    void DispatchInput(const FLECombatIntent& Input, FGameplayTag SourceComboTag, const FGameplayTagContainer& Windows);
 
     // 等旧能力的任务清理后消费缓存。
-    void DrainInput(int32 FinishedLightStage, bool bFinishedRoll);
+    void DrainInput(FGameplayTag FinishedComboTag);
 
     // 预约下一帧处理新的按键，避免重入当前 Montage 回调。
-    void ScheduleDrain(int32 FinishedLightStage, bool bFinishedRoll);
+    void ScheduleDrain(FGameplayTag FinishedComboTag);
 
     // 校验服务端当前 Pawn 的生存和输入状态。
     bool CanAct() const;
@@ -121,7 +131,7 @@ private:
     void HandleAbilitySystemRemoved();
 
     // 在地面开启固定方向的翻滚位移。
-    void StartRoll(const FVector& Direction);
+    void StartRoll(const FVector& Direction, FGameplayTag ComboTag);
 
     // 释放位移与免疫资源，并根据结束结果决定是否接续。
     void FinishRoll(bool bCancelled);
@@ -144,7 +154,9 @@ private:
     double RollStartedAt = 0.0;
     float PreRollMaxWalkSpeed = 0.0f;
     uint16 RollMotionId = 0;
-    int32 ActiveLightStage = 0;
+    FGameplayTag PendingComboTag;
+    FGameplayTag ActiveComboTag;
+    FGameplayTagContainer ActiveGrantedTags;
     bool bImmunityWindowEntered = false;
 
     UPROPERTY(ReplicatedUsing = OnRep_Rolling)

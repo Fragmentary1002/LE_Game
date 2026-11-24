@@ -5,6 +5,7 @@
 #include "Animation/AnimMontage.h"
 #include "Combat/Melee/AnimNotifyState_SoulsMeleeWindow.h"
 #include "LECombatTimelineTask.h"
+#include "LEAbilityDefinition.h"
 #include "NativeGameplayTags.h"
 #include "Enemies/SoulsEnemy.h"
 #include "AbilitySystemComponent.h"
@@ -22,17 +23,17 @@ namespace
 {
     UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Window_Souls_MeleeHit, "Window.Souls.MeleeHit");
     UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Window_Souls_ComboLight, "Window.Souls.Combo.Light");
+    UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Event_Souls_LightAttackSwing, "Event.Souls.LightAttack.Swing");
 
     // 优先使用定义中的命中窗口，旧资产可使用 Montage 轨道上的时间。
-    bool PopulatePlayerTimeline(const USoulsAttackDefinition& Definition, int32 Stage, TArray<FLECombatTimelineWindow>& Windows)
+    bool PopulatePlayerTimeline(const UAnimMontage& Montage, bool bUseDefaultBranchWindow, TArray<FLECombatTimelineWindow>& Windows)
     {
-        Windows = Definition.TimelineWindows;
         if (!Windows.ContainsByPredicate([](const FLECombatTimelineWindow& Window)
         {
             return Window.Tag == TAG_Window_Souls_MeleeHit && Window.IsValid();
         }))
         {
-            for (const FAnimNotifyEvent& Notify : Definition.AttackMontage->Notifies)
+            for (const FAnimNotifyEvent& Notify : Montage.Notifies)
             {
                 if (Cast<UAnimNotifyState_SoulsMeleeWindow>(Notify.NotifyStateClass.Get()))
                 {
@@ -45,13 +46,13 @@ namespace
                 }
             }
         }
-        if (Stage == 1 && !Windows.ContainsByPredicate([](const FLECombatTimelineWindow& Window)
+        if (bUseDefaultBranchWindow && !Windows.ContainsByPredicate([](const FLECombatTimelineWindow& Window)
         {
             return Window.Tag == TAG_Window_Souls_ComboLight && Window.IsValid();
         }))
         {
             // 旧资产默认在最后 0.25 秒素材时间内接收轻击派生。
-            const float End = Definition.AttackMontage->GetPlayLength();
+            const float End = Montage.GetPlayLength();
             Windows.Add({TAG_Window_Souls_ComboLight, FMath::Max(0.0f, End - 0.25f), End});
         }
         return Windows.ContainsByPredicate([](const FLECombatTimelineWindow& Window)
@@ -120,9 +121,13 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
     AActor* Avatar = ActorInfo ? ActorInfo->AvatarActor.Get() : nullptr;
     USoulsMeleeTraceComponent* Trace = Avatar ? Avatar->FindComponentByClass<USoulsMeleeTraceComponent>() : nullptr;
     const USoulsAttackDefinition* Definition = Trace ? Trace->GetAttackDefinition() : nullptr;
-    const bool bPlayerInput = TriggerEventData &&
+    const ULEAbilityDefinition* AbilityDefinition = TriggerEventData
+        ? Cast<ULEAbilityDefinition>(TriggerEventData->OptionalObject.Get()) : nullptr;
+    const bool bDefinitionInput = AbilityDefinition && TriggerEventData->EventTag == AbilityDefinition->AbilityTag;
+    const bool bLegacyInput = TriggerEventData &&
         TriggerEventData->EventTag == FGameplayTag::RequestGameplayTag(TEXT("Event.Souls.LightAttack"));
-    const int32 Stage = bPlayerInput && TriggerEventData->EventMagnitude == 2.0f ? 2 : 1;
+    const bool bPlayerInput = bDefinitionInput || bLegacyInput;
+    const int32 Stage = bLegacyInput && TriggerEventData->EventMagnitude == 2.0f ? 2 : 1;
     float LungeDistance = 0.0f;
     if (TriggerEventData && !bPlayerInput)
     {
@@ -136,7 +141,9 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
         Definition = Cast<USoulsAttackDefinition>(TriggerEventData->OptionalObject.Get());
         LungeDistance = TriggerEventData->EventMagnitude;
     }
-    if (!Trace || !Definition || !Definition->AttackMontage || !ActorInfo->GetAnimInstance())
+    UAnimMontage* Montage = AbilityDefinition ? AbilityDefinition->Execution.Montage.Get()
+        : (Definition ? Definition->AttackMontage.Get() : nullptr);
+    if (!Trace || !Definition || !Montage || !ActorInfo->GetAnimInstance())
     {
         EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
         return;
@@ -144,33 +151,41 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
 
     bool bUseAbilityHitWindow = false;
     TArray<FLECombatTimelineWindow> TimelineWindows;
+    const TArray<FLECombatTimelinePoint>& TimelinePoints = AbilityDefinition ? AbilityDefinition->TimelinePoints : Definition->TimelinePoints;
     if (Avatar->HasAuthority())
     {
         USoulsCombatActionComponent* Combat = Avatar->FindComponentByClass<USoulsCombatActionComponent>();
         if (Combat)
         {
-            bUseAbilityHitWindow = PopulatePlayerTimeline(*Definition, Stage, TimelineWindows);
+            TimelineWindows = AbilityDefinition ? AbilityDefinition->TimelineWindows : Definition->TimelineWindows;
+            bUseAbilityHitWindow = PopulatePlayerTimeline(*Montage, !AbilityDefinition && Stage == 1, TimelineWindows);
         }
         if (!Definition->DamageEffectClass || (bPlayerInput && !Combat) ||
-            !CommitAbility(Handle, ActorInfo, ActivationInfo) || !Trace->BeginAttack(Definition, LungeDistance, bUseAbilityHitWindow))
+            !CommitAbility(Handle, ActorInfo, ActivationInfo) || !Trace->BeginAttack(Definition, LungeDistance, bUseAbilityHitWindow, Montage))
         {
             EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
             return;
         }
         ActiveTrace = Trace;
+        ActiveCombat = Combat;
         if (Combat && !Combat->StartLightAttack(Stage))
         {
+            ActiveCombat.Reset();
             EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
             return;
         }
-        ActiveCombat = Combat;
+        if (!IsActive())
+        {
+            return;
+        }
         HitDelegateHandle = Trace->OnHit.AddUObject(this, &ThisClass::HandleConfirmedHit);
     }
 
     constexpr float SecondStageRateScale = 1.2f;
-    const float PlayRate = FMath::Max(Definition->PlayRate, 0.1f) * (Stage == 2 ? SecondStageRateScale : 1.0f);
+    const float PlayRate = AbilityDefinition ? FMath::Max(AbilityDefinition->Execution.PlayRate, 0.01f)
+        : FMath::Max(Definition->PlayRate, 0.1f) * (Stage == 2 ? SecondStageRateScale : 1.0f);
     MontageTask = UAbilityTask_PlayMontageAndWait::CreatePlayMontageAndWaitProxy(this, NAME_None,
-        Definition->AttackMontage, PlayRate, NAME_None, true, 1.0f, 0.0f, true);
+        Montage, PlayRate, NAME_None, true, 1.0f, 0.0f, true);
     if (!MontageTask)
     {
         EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
@@ -180,14 +195,39 @@ void USoulsGameplayAbility_LightAttack::ActivateAbility(const FGameplayAbilitySp
     MontageTask->OnInterrupted.AddDynamic(this, &ThisClass::HandleMontageInterrupted);
     MontageTask->OnCancelled.AddDynamic(this, &ThisClass::HandleMontageInterrupted);
     MontageTask->ReadyForActivation();
-    if (IsActive() && ActiveCombat.IsValid() && (!TimelineWindows.IsEmpty() || !Definition->TimelinePoints.IsEmpty()))
+    if (IsActive() && Avatar->HasAuthority() && AbilityDefinition)
     {
-        const FAnimMontageInstance* Instance = ActorInfo->GetAnimInstance()->GetActiveInstanceForMontage(Definition->AttackMontage);
-        const float EffectiveRate = (Instance ? Instance->GetPlayRate() : PlayRate) * Definition->AttackMontage->RateScale;
-        TimelineTask = ULECombatTimelineTask::Create(this, TimelineWindows, Definition->TimelinePoints, EffectiveRate);
+        ApplyInteraction(AbilityDefinition->Interaction);
+    }
+    if (IsActive() && ActiveCombat.IsValid() && (!TimelineWindows.IsEmpty() || !TimelinePoints.IsEmpty()))
+    {
+        const FAnimMontageInstance* Instance = ActorInfo->GetAnimInstance()->GetActiveInstanceForMontage(Montage);
+        const float EffectiveRate = (Instance ? Instance->GetPlayRate() : PlayRate) * Montage->RateScale;
+        TimelineTask = ULECombatTimelineTask::Create(this, TimelineWindows, TimelinePoints, EffectiveRate);
         TimelineTask->OnWindowChanged.AddUObject(this, &ThisClass::HandleTimelineWindow);
         TimelineTask->OnPointReached.AddUObject(this, &ThisClass::HandleTimelinePoint);
         TimelineTask->ReadyForActivation();
+    }
+}
+
+// 将资产规则加入本次招式状态，允许标签回调中断当前能力。
+void USoulsGameplayAbility_LightAttack::ApplyInteraction(const FLEAbilityInteraction& Interaction)
+{
+    UAbilitySystemComponent* ASC = GetAbilitySystemComponentFromActorInfo();
+    InteractionBlockedAbilities = Interaction.BlockAbilityTags;
+    ASC->BlockAbilitiesWithTags(InteractionBlockedAbilities);
+    for (const FGameplayTag& Tag : Interaction.ActivationOwnedTags)
+    {
+        InteractionOwnedTags.AddTag(Tag);
+        ASC->AddLooseGameplayTag(Tag);
+        if (!IsActive())
+        {
+            return;
+        }
+    }
+    if (!Interaction.CancelAbilityTags.IsEmpty())
+    {
+        ASC->CancelAbilities(&Interaction.CancelAbilityTags, nullptr, this);
     }
 }
 
@@ -221,6 +261,15 @@ void USoulsGameplayAbility_LightAttack::EndAbility(const FGameplayAbilitySpecHan
     const TWeakObjectPtr<USoulsCombatActionComponent> Combat = ActiveCombat;
     ActiveCombat.Reset();
     MontageTask = nullptr;
+    const FGameplayTagContainer OwnedTags = MoveTemp(InteractionOwnedTags);
+    const FGameplayTagContainer BlockedAbilities = MoveTemp(InteractionBlockedAbilities);
+    InteractionOwnedTags.Reset();
+    InteractionBlockedAbilities.Reset();
+    if (UAbilitySystemComponent* ASC = GetAbilitySystemComponentFromActorInfo())
+    {
+        ASC->UnBlockAbilitiesWithTags(BlockedAbilities);
+        ASC->RemoveLooseGameplayTags(OwnedTags);
+    }
     Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
     if (USoulsCombatActionComponent* CombatActions = Combat.Get())
     {

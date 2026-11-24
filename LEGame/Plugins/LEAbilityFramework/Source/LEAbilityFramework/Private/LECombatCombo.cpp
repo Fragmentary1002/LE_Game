@@ -39,14 +39,13 @@ void FLECombatCombo::Reset()
 
 // 相同优先级时保留传入列表中的第一条规则。
 const FLECombatComboTransition* FLECombatCombo::FindTransition(TConstArrayView<FLECombatComboTransition> Transitions,
-    FName SourceNode, FGameplayTag IntentTag, const FGameplayTagContainer& OpenWindows,
+    FGameplayTag IntentTag, const FGameplayTagContainer& OpenWindows,
     const FGameplayTagContainer& OwnedTags)
 {
     const FLECombatComboTransition* Best = nullptr;
     for (const FLECombatComboTransition& Transition : Transitions)
     {
-        if (Transition.SourceNode == SourceNode && Transition.IntentTag == IntentTag &&
-            !Transition.TargetNode.IsNone() &&
+        if (Transition.TriggerInputIntentTag == IntentTag && Transition.TargetComboTag.IsValid() &&
             (!Transition.RequiredWindow.IsValid() || OpenWindows.HasTagExact(Transition.RequiredWindow)) &&
             OwnedTags.HasAll(Transition.RequiredTags) && !OwnedTags.HasAny(Transition.BlockedTags) &&
             (!Best || Transition.Priority > Best->Priority))

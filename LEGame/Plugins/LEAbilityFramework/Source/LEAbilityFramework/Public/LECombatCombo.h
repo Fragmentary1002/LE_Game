@@ -6,22 +6,19 @@
 #include "LECombatInput.h"
 #include "LECombatCombo.generated.h"
 
-class UGameplayAbility;
+class ULEAbilityDefinition;
 
 /** 定义一条从当前招式到目标招式的可配置派生。 */
 USTRUCT(BlueprintType)
-struct LEABILITYFRAMEWORK_API FLECombatComboTransition : public FTableRowBase
+struct LEABILITYFRAMEWORK_API FLECombatComboTransition
 {
     GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, Category = "Combo")
-    FName SourceNode;
+    FGameplayTag TriggerInputIntentTag;
 
     UPROPERTY(EditAnywhere, Category = "Combo")
-    FGameplayTag IntentTag;
-
-    UPROPERTY(EditAnywhere, Category = "Combo")
-    FName TargetNode;
+    FGameplayTag TargetComboTag;
 
     UPROPERTY(EditAnywhere, Category = "Combo")
     FGameplayTag RequiredWindow;
@@ -36,7 +33,26 @@ struct LEABILITYFRAMEWORK_API FLECombatComboTransition : public FTableRowBase
     int32 Priority = 0;
 };
 
-/** 以 Combo 目标节点为行名，配置 GAS 能力或玩法原生动作。 */
+/** 以 Combo Tag 为行名，配置当前节点的技能和可用派生。 */
+USTRUCT(BlueprintType)
+struct LEABILITYFRAMEWORK_API FLECombatComboDefinitionRow : public FTableRowBase
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, Category = "Combo")
+    FGameplayTag ComboTag;
+
+    UPROPERTY(EditAnywhere, Category = "Combo")
+    FGameplayTag AbilityTag;
+
+    UPROPERTY(EditAnywhere, Category = "Combo")
+    FGameplayTagContainer GrantedTags;
+
+    UPROPERTY(EditAnywhere, Category = "Combo")
+    TArray<FLECombatComboTransition> Transitions;
+};
+
+/** 以 Ability Tag 为行名，索引供 GAS 读取的技能定义资产。 */
 USTRUCT(BlueprintType)
 struct LEABILITYFRAMEWORK_API FLEAbilityRegistryRow : public FTableRowBase
 {
@@ -46,13 +62,7 @@ struct LEABILITYFRAMEWORK_API FLEAbilityRegistryRow : public FTableRowBase
     FGameplayTag AbilityTag;
 
     UPROPERTY(EditAnywhere, Category = "Ability")
-    TSubclassOf<UGameplayAbility> AbilityClass;
-
-    UPROPERTY(EditAnywhere, Category = "Ability")
-    FGameplayTag ActivationEvent;
-
-    UPROPERTY(EditAnywhere, Category = "Ability")
-    float EventMagnitude = 0.0f;
+    TObjectPtr<ULEAbilityDefinition> AbilityDefinition;
 };
 
 /** 处理离散意图的缓存和连招出边匹配。 */
@@ -73,7 +83,7 @@ public:
 
     // 从匹配输入和窗口的出边中选择最高优先级的规则。
     static const FLECombatComboTransition* FindTransition(TConstArrayView<FLECombatComboTransition> Transitions,
-        FName SourceNode, FGameplayTag IntentTag, const FGameplayTagContainer& OpenWindows,
+        FGameplayTag IntentTag, const FGameplayTagContainer& OpenWindows,
         const FGameplayTagContainer& OwnedTags);
 
 private:

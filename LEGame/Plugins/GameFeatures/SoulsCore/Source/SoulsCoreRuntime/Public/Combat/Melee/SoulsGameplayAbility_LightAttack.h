@@ -6,6 +6,7 @@
 
 class UAbilityTask_PlayMontageAndWait;
 class ULECombatTimelineTask;
+struct FLEAbilityInteraction;
 class USoulsCombatActionComponent;
 class USoulsMeleeTraceComponent;
 
@@ -57,6 +58,11 @@ private:
     UPROPERTY(Transient)
     TObjectPtr<ULECombatTimelineTask> TimelineTask;
 
+    // 在权威侧应用技能资产的标签交互规则。
+    void ApplyInteraction(const FLEAbilityInteraction& Interaction);
+
+    FGameplayTagContainer InteractionOwnedTags;
+    FGameplayTagContainer InteractionBlockedAbilities;
     TWeakObjectPtr<USoulsCombatActionComponent> ActiveCombat;
     TWeakObjectPtr<USoulsMeleeTraceComponent> ActiveTrace;
     FDelegateHandle HitDelegateHandle;

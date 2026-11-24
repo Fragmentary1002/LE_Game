@@ -20,6 +20,9 @@ struct LEABILITYFRAMEWORK_API FLECombatTimelineWindow
     UPROPERTY(EditAnywhere, Category = "Combat Timeline", meta = (ClampMin = "0"))
     float EndTime = 0.0f;
 
+    UPROPERTY(EditAnywhere, Category = "Combat Timeline")
+    FText DisplayName;
+
     // 校验窗口标签及有效时段。
     bool IsValid() const;
 };
@@ -35,6 +38,9 @@ struct LEABILITYFRAMEWORK_API FLECombatTimelinePoint
 
     UPROPERTY(EditAnywhere, Category = "Combat Timeline", meta = (ClampMin = "0"))
     float Time = 0.0f;
+
+    UPROPERTY(EditAnywhere, Category = "Combat Timeline")
+    FText DisplayName;
 };
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FLECombatTimelineWindowChanged, FGameplayTag, bool);

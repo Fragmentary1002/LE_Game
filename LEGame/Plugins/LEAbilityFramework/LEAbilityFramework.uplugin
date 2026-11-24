@@ -7,7 +7,8 @@
     "Category": "Gameplay",
     "CanContainContent": true,
     "Modules": [
-        { "Name": "LEAbilityFramework", "Type": "Runtime", "LoadingPhase": "Default" }
+        { "Name": "LEAbilityFramework", "Type": "Runtime", "LoadingPhase": "Default" },
+        { "Name": "LEAbilityFrameworkEditor", "Type": "Editor", "LoadingPhase": "Default" }
     ],
     "Plugins": [
         { "Name": "EnhancedInput", "Enabled": true },

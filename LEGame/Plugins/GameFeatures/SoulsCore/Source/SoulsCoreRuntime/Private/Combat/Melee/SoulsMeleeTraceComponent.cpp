@@ -55,7 +55,7 @@ void USoulsMeleeTraceComponent::BeginPlay()
 
 // 只允许存活、配置完整的权威角色开始新的单次攻击。
 bool USoulsMeleeTraceComponent::BeginAttack(const USoulsAttackDefinition* Definition, float LungeDistance,
-    bool bInUseAbilityHitWindow)
+    bool bInUseAbilityHitWindow, const UAnimSequenceBase* Montage)
 {
     ACharacter* Character = GetPawn<ACharacter>();
     const ULyraHealthComponent* Health = ULyraHealthComponent::FindHealthComponent(GetOwner());
@@ -66,6 +66,7 @@ bool USoulsMeleeTraceComponent::BeginAttack(const USoulsAttackDefinition* Defini
         return false;
     }
     ActiveAttackDefinition = Definition;
+    ActiveMontage = Montage ? Montage : Definition->AttackMontage.Get();
     ActiveLungeDistance = FMath::Max(0.0f, LungeDistance);
     bAttackActive = true;
     bHitWindowEnabled = false;
@@ -106,7 +107,7 @@ void USoulsMeleeTraceComponent::SetMontageHitWindow(const UAnimSequenceBase* Ani
     float NotifyDuration)
 {
     const USoulsAttackDefinition* Definition = ActiveAttackDefinition.Get();
-    if (bUseAbilityHitWindow || !bAttackActive || !Definition || Animation != Definition->AttackMontage.Get())
+    if (bUseAbilityHitWindow || !bAttackActive || !Definition || Animation != ActiveMontage.Get())
     {
         return;
     }
@@ -154,6 +155,7 @@ void USoulsMeleeTraceComponent::EndAttack()
     }
     StopLunge();
     ActiveAttackDefinition.Reset();
+    ActiveMontage.Reset();
     ActiveLungeDistance = 0.0f;
     bAttackActive = false;
     bHitWindowEnabled = false;
